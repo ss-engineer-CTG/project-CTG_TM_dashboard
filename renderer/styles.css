@@ -1,0 +1,239 @@
+:root {
+    --color-background: #1a1a1a;
+    --color-surface: #2d2d2d;
+    --color-text-primary: #ffffff;
+    --color-text-secondary: #b3b3b3;
+    --color-accent: #60cdff;
+    --color-success: #50ff96;
+    --color-warning: #ffeb45;
+    --color-danger: #ff5f5f;
+    --color-info: #60cdff;
+    --color-neutral: #c8c8c8;
+  }
+  
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  
+  body, html {
+    height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, 
+                 Helvetica, Arial, sans-serif;
+    background-color: var(--color-background);
+    color: var(--color-text-primary);
+    overflow: hidden;
+  }
+  
+  #app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  
+  /* ヘッダー */
+  .app-header {
+    background-color: var(--color-surface);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    padding: 10px 0;
+  }
+  
+  .header-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  
+  .title-container h1 {
+    font-size: 1.5rem;
+    color: var(--color-text-primary);
+  }
+  
+  .title-container p {
+    font-size: 0.8rem;
+    color: var(--color-text-secondary);
+  }
+  
+  .controls-container {
+    display: flex;
+    align-items: center;
+  }
+  
+  #selected-file-display {
+    color: var(--color-text-secondary);
+    font-size: 0.8rem;
+    margin-right: 10px;
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  
+  .button-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  
+  /* ボタン */
+  .btn {
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: all 0.3s ease;
+    border: none;
+  }
+  
+  .btn-primary {
+    background-color: var(--color-accent);
+    color: var(--color-surface);
+  }
+  
+  .btn-primary:hover {
+    background-color: rgba(96, 205, 255, 0.8);
+  }
+  
+  .btn-outline {
+    background-color: transparent;
+    color: var(--color-text-accent);
+    border: 1px solid var(--color-accent);
+    color: var(--color-accent);
+  }
+  
+  .btn-outline:hover {
+    background-color: rgba(96, 205, 255, 0.1);
+  }
+  
+  /* コンテンツエリア */
+  .content-area {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+  
+  #dashboard-view {
+    width: 100%;
+    height: 100%;
+    border: none;
+  }
+  
+  /* ローディングオーバーレイ */
+  #loading-overlay, #server-error-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(26, 26, 26, 0.9);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+  }
+  
+  #server-error-overlay {
+    color: var(--color-danger);
+  }
+  
+  .error-icon {
+    font-size: 48px;
+    margin-bottom: 10px;
+  }
+  
+  #server-error-details {
+    margin: 10px 0 20px;
+    max-width: 80%;
+    text-align: center;
+    color: var(--color-text-secondary);
+  }
+  
+  .spinner {
+    border: 4px solid rgba(255, 255, 255, 0.1);
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border-left-color: var(--color-accent);
+    animation: spin 1s linear infinite;
+    margin-bottom: 10px;
+  }
+  
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+  
+  /* ステータスバー */
+  .status-bar {
+    background-color: var(--color-surface);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 5px 20px;
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    display: flex;
+    justify-content: space-between;
+  }
+  
+  .status-indicator {
+    display: flex;
+    align-items: center;
+  }
+  
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 5px;
+    background-color: var(--color-warning);
+  }
+  
+  .status-dot.connected {
+    background-color: var(--color-success);
+  }
+  
+  .status-dot.error {
+    background-color: var(--color-danger);
+  }
+  
+  /* 通知 */
+  #notification-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 10px 20px;
+    border-radius: 4px;
+    background-color: var(--color-success);
+    color: white;
+    z-index: 1000;
+    transition: opacity 0.3s ease-in-out;
+  }
+  
+  #notification-container.error {
+    background-color: var(--color-danger);
+  }
+  
+  .notification-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  
+  .notification-close {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 1.2rem;
+    cursor: pointer;
+    margin-left: 15px;
+  }
+  
+  /* ユーティリティ */
+  .hidden {
+    display: none !important;
+  }

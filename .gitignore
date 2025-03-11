@@ -1,0 +1,82 @@
+# Node.js
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+package-lock.json
+yarn.lock
+
+# Electron
+dist/
+build/icons/*.png
+build/icons/*.icns
+build/*.js.map
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+python/venv/
+python/logs/
+python/Include/
+python/etc/
+python/share/
+python/Scripts/
+python/Lib/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Dash
+.plotly/
+
+# ログファイル
+logs/
+*.log
+
+# OS関連
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# エディタ関連
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 一時ファイル
+temp/
+tmp/
+
+# 実行時生成ファイル
+python/sample_data/*
+!python/sample_data/.gitkeep
+
+# ビルド成果物
+dist/
+out/
+*.app/
+*.exe
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+
+# セキュリティ関連（例：API キーや証明書）
+.env
+.env.local
+*.pem
+*.p12
+*.pfx
+*.key
+
+# 大きなバイナリファイル（例：データベース、画像、動画）
+*.sqlite
+*.db
