@@ -1,0 +1,99 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-bg: #1a1a1a;
+  --color-surface: #2d2d2d;
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #b3b3b3;
+  --color-text-accent: #60cdff;
+  --color-status-success: #50ff96;
+  --color-status-warning: #ffeb45;
+  --color-status-danger: #ff5f5f;
+  --color-status-info: #60cdff;
+  --color-status-neutral: #c8c8c8;
+}
+
+@layer base {
+  body {
+    @apply bg-dark-bg text-light-primary;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-dark-surface p-5 rounded-lg shadow-lg border border-gray-700;
+  }
+  
+  .btn {
+    @apply px-4 py-2 rounded text-sm font-medium transition-colors;
+  }
+  
+  .btn-primary {
+    @apply bg-accent text-dark-surface hover:bg-accent hover:opacity-90;
+  }
+  
+  .btn-outline {
+    @apply border border-accent text-accent hover:bg-accent hover:text-dark-surface;
+  }
+  
+  .link-button {
+    @apply inline-flex items-center px-3 py-1.5 text-xs border border-accent text-accent rounded 
+           hover:bg-accent hover:text-dark-surface transition-colors;
+  }
+  
+  .progress-bar {
+    @apply w-full h-5 bg-gray-700 rounded overflow-hidden relative;
+  }
+  
+  .notification {
+    @apply fixed bottom-5 right-5 p-3 rounded shadow-lg z-50 transition-opacity duration-300;
+  }
+  
+  .notification-success {
+    @apply bg-success text-dark-surface;
+  }
+  
+  .notification-error {
+    @apply bg-danger text-dark-surface;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-track {
+    @apply bg-dark-surface;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply bg-gray-600 rounded;
+  }
+}
+
+/* テーブル特有のスタイル */
+.dashboard-table {
+  @apply w-full border-collapse;
+}
+
+.dashboard-table th {
+  @apply bg-dark-surface text-light-primary p-3 text-left border-b border-gray-700 
+         sticky top-0 z-10;
+}
+
+.dashboard-table td {
+  @apply p-3 border-b border-gray-700 text-light-primary;
+}
+
+.dashboard-table tr:hover {
+  @apply bg-gray-800/50;
+}
