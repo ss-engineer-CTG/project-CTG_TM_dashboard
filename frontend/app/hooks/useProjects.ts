@@ -1,9 +1,9 @@
 'use client';
 
 import { useQuery, useMutation, useQueryClient } from 'react-query';
-import { getProjects, getMetrics, openFile } from '@/app/lib/api';
-import { Project, DashboardMetrics, FileResponse } from '@/app/lib/types';
-import { useNotification } from '@/app/contexts/NotificationContext';
+import { getProjects, getMetrics, openFile } from '@/lib/api';
+import { Project, DashboardMetrics, FileResponse } from '@/lib/types';
+import { useNotification } from '@/contexts/NotificationContext';
 
 export const useProjects = (filePath?: string) => {
   const queryClient = useQueryClient();
@@ -60,8 +60,8 @@ export const useProjects = (filePath?: string) => {
   const refreshData = async () => {
     try {
       await Promise.all([
-        refetchProjects(),
-        refetchMetrics()
+        refetchProjects() as Promise<unknown>,
+        refetchMetrics() as Promise<unknown>
       ]);
       addNotification('データを更新しました', 'success');
     } catch (error) {

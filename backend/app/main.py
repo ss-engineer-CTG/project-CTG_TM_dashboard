@@ -3,8 +3,21 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
 import sys
+from pathlib import Path
 
-from app.routers import projects, metrics, files, health
+# 相対インポートに変更
+try:
+    # アプリがインストールされている場合は絶対インポートを使用
+    from app.routers import projects, metrics, files, health
+except ImportError:
+    # ローカル開発環境の場合は相対インポートを試行
+    try:
+        from .routers import projects, metrics, files, health
+    except ImportError:
+        # 両方失敗した場合はPythonPathを調整
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from app.routers import projects, metrics, files, health
 
 app = FastAPI(
     title="Project Dashboard API",

@@ -1,8 +1,8 @@
 import './globals.css';
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
-import { NotificationProvider } from '@/app/contexts/NotificationContext';
-import Notification from '@/app/components/Notification';
+import { NotificationProvider } from '@/contexts/NotificationContext';
+import Notification from '@/components/Notification';
 import { Providers } from './providers';
 
 const inter = Inter({ subsets: ['latin'] });

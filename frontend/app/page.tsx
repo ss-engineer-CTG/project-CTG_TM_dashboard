@@ -1,14 +1,14 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { useProjects } from '@/app/hooks/useProjects';
-import Header from '@/app/components/Header';
-import MetricsCards from '@/app/components/MetricsCards';
-import ProjectTable from '@/app/components/ProjectTable';
-import ProgressChart from '@/app/components/ProgressChart';
-import DurationChart from '@/app/components/DurationChart';
-import { getDefaultPath, healthCheck } from '@/app/lib/api';
-import { useNotification } from '@/app/contexts/NotificationContext';
+import { useProjects } from '@/hooks/useProjects';
+import Header from '@/components/Header';
+import MetricsCards from '@/components/MetricsCards';
+import ProjectTable from '@/components/ProjectTable';
+import ProgressChart from '@/components/ProgressChart';
+import DurationChart from '@/components/DurationChart';
+import { getDefaultPath, healthCheck } from '@/lib/api';
+import { useNotification } from '@/contexts/NotificationContext';
 
 export default function Home() {
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);

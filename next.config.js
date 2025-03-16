@@ -16,7 +16,7 @@ const nextConfig = {
         ]
       : [];
   },
-  // 出力ディレクトリを指定
+  // 出力ディレクトリを指定 - Electronとの統一
   distDir: 'out',
   // publicディレクトリの指定
   assetPrefix: '',

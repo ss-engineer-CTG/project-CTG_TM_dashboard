@@ -30,13 +30,20 @@ function startFastApi() {
     }
     
     const scriptPath = path.join(resourcesPath, 'backend', 'app', 'main.py');
+    const backendDir = path.join(resourcesPath, 'backend');
 
     console.log(`Starting FastAPI with: ${pythonPath} ${scriptPath}`);
+    console.log(`Working directory: ${backendDir}`);
 
-    // FastAPIプロセスを起動
+    // FastAPIプロセスを起動 - 作業ディレクトリとPYTHONPATHを明示的に設定
     fastApiProcess = spawn(pythonPath, [scriptPath], {
       stdio: 'pipe',
-      detached: false
+      detached: false,
+      cwd: backendDir, // 作業ディレクトリを明示的に指定
+      env: { 
+        ...process.env, 
+        PYTHONPATH: backendDir // Pythonのパスを設定
+      }
     });
 
     // プロセスのログを表示
@@ -67,6 +74,36 @@ function startFastApi() {
   });
 }
 
+// メインウィンドウを作成する関数
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js')
+    }
+  });
+
+  // Next.jsアプリケーションのロード
+  const url = isDev 
+    ? 'http://localhost:3000' // 開発環境ではNext.jsの開発サーバーを使用
+    : `file://${path.join(__dirname, '../out/index.html')}`; // ビルド後はHTMLファイルを直接使用
+
+  mainWindow.loadURL(url);
+
+  // 開発ツールを開く（開発環境のみ）
+  if (isDev) {
+    mainWindow.webContents.openDevTools();
+  }
+
+  // ウィンドウが閉じられたときの処理
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
+}
+
 // アプリケーションの起動準備が完了したとき
 app.whenReady().then(async () => {
   try {
@@ -74,39 +111,7 @@ app.whenReady().then(async () => {
     await startFastApi();
 
     // メインウィンドウの作成
-    mainWindow = new BrowserWindow({
-      width: 1200,
-      height: 800,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        preload: path.join(__dirname, 'preload.js')
-      }
-    });
-
-    // Next.jsアプリケーションのロード
-    const url = isDev 
-      ? 'http://localhost:3000' // 開発環境ではNext.jsの開発サーバーを使用
-      : `file://${path.join(__dirname, '../out/index.html')}`; // ビルド後はHTMLファイルを直接使用
-
-    mainWindow.loadURL(url);
-
-    // 開発ツールを開く（開発環境のみ）
-    if (isDev) {
-      mainWindow.webContents.openDevTools();
-    }
-
-    // ウィンドウが閉じられたときの処理
-    mainWindow.on('closed', () => {
-      mainWindow = null;
-    });
-
-    // アプリケーションのアクティベーション
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow();
-      }
-    });
+    createWindow();
   } catch (error) {
     console.error('Application startup error:', error);
     app.quit();
@@ -133,6 +138,13 @@ app.on('window-all-closed', async () => {
   // MacOSではアプリケーションが明示的に終了されるまでアクティブにする（標準的な挙動）
   if (process.platform !== 'darwin') {
     app.quit();
+  }
+});
+
+// アプリケーションのアクティベーション
+app.on('activate', () => {
+  if (BrowserWindow.getAllWindows().length === 0) {
+    createWindow();
   }
 });
 

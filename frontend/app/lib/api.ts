@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { DashboardMetrics, Project, FileResponse, RecentTasks } from './types';
+import { DashboardMetrics, Project, FileResponse, RecentTasks, HealthResponse, ShutdownResponse } from './types';
 
 // APIクライアントのベース設定
 const apiClient = axios.create({
@@ -62,15 +62,15 @@ export const selectFile = async (initialPath?: string): Promise<FileResponse> =>
 };
 
 // APIの健全性をチェック
-export const healthCheck = async (): Promise<any> => {
-  // 修正: 正しいAPIパスを使用
-  const { data } = await apiClient.get('/health');
+export const healthCheck = async (): Promise<HealthResponse> => {
+  // /api プレフィックスはbaseURLに含まれているため、パスは '/health' だけでOK
+  const { data } = await apiClient.get<HealthResponse>('/health');
   return data;
 };
 
 // バックエンドのシャットダウンをリクエスト
-export const requestShutdown = async (): Promise<any> => {
-  // 修正: 正しいAPIパスを使用
-  const { data } = await apiClient.post('/shutdown');
+export const requestShutdown = async (): Promise<ShutdownResponse> => {
+  // /api プレフィックスはbaseURLに含まれているため、パスは '/shutdown' だけでOK
+  const { data } = await apiClient.post<ShutdownResponse>('/shutdown');
   return data;
 };
