@@ -1,23 +1,31 @@
 import './globals.css';
 import type { Metadata } from 'next';
-import { DashboardProvider } from '@/contexts/DashboardContext';
+import { Inter } from 'next/font/google';
+import { NotificationProvider } from '@/app/contexts/NotificationContext';
+import Notification from '@/app/components/Notification';
+import { Providers } from './providers';
+
+const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: 'プロジェクト進捗ダッシュボード',
-  description: 'プロジェクト管理および進捗追跡ダッシュボード',
+  description: 'プロジェクト管理ダッシュボードアプリケーション',
 };
 
 export default function RootLayout({
   children,
 }: {
-  children: React.ReactNode;
+  children: React.ReactNode
 }) {
   return (
     <html lang="ja">
-      <body>
-        <DashboardProvider>
-          {children}
-        </DashboardProvider>
+      <body className={inter.className}>
+        <Providers>
+          <NotificationProvider>
+            {children}
+            <Notification />
+          </NotificationProvider>
+        </Providers>
       </body>
     </html>
   );

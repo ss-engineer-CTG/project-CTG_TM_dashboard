@@ -1,33 +1,66 @@
-# Global ignores
-.DS_Store
-Thumbs.db
-node_modules/
-*.log
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
 
-# Python ignores
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-venv_DashBoard
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+/dist
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env*.local
 .env
 
-# Logs and runtime files
-backend/logs/
-data/exports/
+# vercel
+.vercel
 
-# Next.js specific ignores
-.next/
-out/
+# typescript
+*.tsbuildinfo
+next-env.d.ts
 
-# Dependency lock files
-frontend/package-lock.json
-
-# Build artifacts
-dist/
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Miscellaneous
+# virtualenv
+backend/venv/
+venv/
+ENV/
+
+# IDE
 .idea/
 .vscode/
 *.swp
