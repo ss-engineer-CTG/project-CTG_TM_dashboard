@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 
 
@@ -13,6 +13,7 @@ class Task(BaseModel):
 
 
 class Project(BaseModel):
+    # 数値か文字列のどちらでも受け入れるように型定義を修正
     project_id: str
     project_name: str
     process: str

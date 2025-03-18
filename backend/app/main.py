@@ -1,9 +1,34 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
 import sys
 from pathlib import Path
+import logging
+import time
+from contextlib import asynccontextmanager
+
+# ロギング設定を追加
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+# モジュールのパスを追加
+current_dir = Path(__file__).parent
+if str(current_dir.parent) not in sys.path:
+    sys.path.insert(0, str(current_dir.parent))
+
+# アプリ初期化時にアプリケーション環境情報をログ出力
+logger = logging.getLogger("api.startup")
+logger.info(f"カレントディレクトリ: {os.getcwd()}")
+logger.info(f"Python実行パス: {sys.executable}")
+logger.info(f"Python バージョン: {sys.version}")
+logger.info(f"環境変数 PMSUITE_DASHBOARD_FILE: {os.environ.get('PMSUITE_DASHBOARD_FILE', '未設定')}")
+logger.info(f"環境変数 APP_PATH: {os.environ.get('APP_PATH', '未設定')}")
 
 # 相対インポートに変更
 try:
@@ -19,10 +44,32 @@ except ImportError:
         sys.path.insert(0, str(Path(__file__).parent.parent))
         from app.routers import projects, metrics, files, health
 
+# ライフスパンイベントマネージャ (FastAPIの新しい推奨方法)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """アプリケーションのライフスパンイベントを管理する"""
+    # 起動時の処理
+    logger.info("APIサーバーを起動しました")
+    logger.info(f"アプリケーションURL: http://127.0.0.1:8000")
+    logger.info(f"APIドキュメント: http://127.0.0.1:8000/docs")
+    
+    # データディレクトリのチェック
+    data_dir = Path(os.getcwd()) / "data" / "exports"
+    if not data_dir.exists():
+        logger.warning(f"データディレクトリが見つかりません: {data_dir}")
+        logger.info("サンプルデータが使用される可能性があります")
+    
+    yield  # アプリケーションの実行中
+    
+    # 終了時の処理
+    logger.info("APIサーバーを終了します")
+
+# アプリケーションインスタンスの作成
 app = FastAPI(
     title="Project Dashboard API",
     description="API for the Project Management Dashboard",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan  # 新しいライフスパンイベントマネージャを使用
 )
 
 # CORS設定 - デスクトップアプリケーションでの使用を考慮
@@ -33,6 +80,45 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ロギングミドルウェア（正しいASGIミドルウェア構造）
+@app.middleware("http")
+async def logging_middleware(request: Request, call_next):
+    """リクエストとレスポンスをログに記録するミドルウェア"""
+    # リクエストID
+    request_id = request.headers.get("X-Request-ID", "unknown")
+    
+    # リクエスト情報をログに記録
+    logger.info(f"Request {request_id}: {request.method} {request.url.path}")
+    
+    # クエリパラメータ
+    if request.query_params:
+        logger.info(f"Query params {request_id}: {dict(request.query_params)}")
+    
+    # リクエストの開始時間
+    start_time = time.time()
+    
+    try:
+        # 次のミドルウェアまたはエンドポイント処理
+        response = await call_next(request)
+        
+        # 処理時間
+        process_time = time.time() - start_time
+        
+        # レスポンス情報をログに記録
+        logger.info(
+            f"Response {request_id}: status={response.status_code}, "
+            f"process_time={process_time:.3f}s"
+        )
+        
+        return response
+    except Exception as e:
+        # エラー情報をログに記録
+        logger.error(
+            f"Error {request_id}: {type(e).__name__}, {str(e)}, "
+            f"process_time={time.time() - start_time:.3f}s"
+        )
+        raise
 
 # ルーターの登録
 app.include_router(projects.router, prefix="/api", tags=["projects"])
@@ -47,6 +133,7 @@ async def shutdown():
     import asyncio
     # 非同期でアプリケーションを終了
     async def shutdown_app():
+        logger.info("シャットダウンリクエストを受信しました。アプリケーションを終了します。")
         await asyncio.sleep(1)
         os._exit(0)
     
@@ -62,4 +149,5 @@ if __name__ == "__main__":
         except ValueError:
             pass
     
+    logger.info(f"サーバーをポート {port} で起動します")
     uvicorn.run("app.main:app", host="127.0.0.1", port=port, reload=False)

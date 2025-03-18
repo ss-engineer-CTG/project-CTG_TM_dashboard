@@ -1,12 +1,19 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  output: 'export', // 静的エクスポート設定
-  images: {
-    unoptimized: true, // エクスポート時に必要
-  },
+  
+  // 環境に応じた条件付き設定
+  ...(process.env.NODE_ENV === 'production' ? {
+    // 本番ビルド時のみ静的エクスポートを有効化
+    output: 'export',
+    images: {
+      unoptimized: true,
+    },
+  } : {}),
+  
   // 開発環境でのAPI通信用プロキシ設定
   async rewrites() {
+    // 開発環境でのみリライトを有効化
     return process.env.NODE_ENV === 'development'
       ? [
           {
@@ -16,8 +23,10 @@ const nextConfig = {
         ]
       : [];
   },
+  
   // 出力ディレクトリを指定 - Electronとの統一
   distDir: 'out',
+  
   // publicディレクトリの指定
   assetPrefix: '',
 }

@@ -7,6 +7,12 @@ contextBridge.exposeInMainWorld('electron', {
   // アプリケーションパスを取得
   getAppPath: () => ipcRenderer.invoke('get-app-path'),
   
+  // アプリ環境情報
+  env: {
+    isElectron: true,
+    apiUrl: 'http://127.0.0.1:8000/api'
+  },
+  
   // ファイルシステム機能
   fs: {
     // ファイルを読み込む

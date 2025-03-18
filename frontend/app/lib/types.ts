@@ -97,3 +97,24 @@ export interface HealthResponse {
 export interface ShutdownResponse {
   status: string;
 }
+
+export interface APIConnectionStatus {
+  connected: boolean;
+  loading: boolean;
+  message: string;
+  lastChecked: Date | null;
+  details?: any;
+}
+
+export interface APIError extends Error {
+  type: 'server_error' | 'network_error' | 'request_error';
+  details: string;
+  status?: number;
+  isApiError: boolean;
+}
+
+// 既存の型を拡張して、エラー情報を含むようにする
+export interface ErrorInfo {
+  message: string;
+  details?: any;
+}
