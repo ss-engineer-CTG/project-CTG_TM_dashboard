@@ -6,14 +6,21 @@ import sys
 
 router = APIRouter()
 
+# GET メソッドと HEAD メソッドの両方をサポート
 @router.get("/health", response_model=dict)
+@router.head("/health", status_code=200)
 async def health_check(response: Response):
     """
     APIの健全性をチェックするエンドポイント
     
     Returns:
-        ステータス情報
+        ステータス情報 (HEAD リクエストの場合はボディなし)
     """
+    # HEADリクエストの場合は早期リターン
+    if response.headers.get('sec-fetch-mode') == 'no-cors' or response.headers.get('connection') == 'close':
+        response.status_code = 200
+        return {"status": "ok"}
+    
     try:
         # サーバー情報を取得
         python_version = sys.version

@@ -83,21 +83,11 @@ interface NextTask {
 export interface Notification {
   id: string;
   message: string;
-  type: 'success' | 'error';
+  type: 'success' | 'error' | 'info' | 'warning';
   duration?: number;
 }
 
-// 新規追加: API応答の型定義
-export interface HealthResponse {
-  status: string;
-  time: string;
-  version: string;
-}
-
-export interface ShutdownResponse {
-  status: string;
-}
-
+// API接続状態の型定義
 export interface APIConnectionStatus {
   connected: boolean;
   loading: boolean;
@@ -106,15 +96,45 @@ export interface APIConnectionStatus {
   details?: any;
 }
 
+// APIエラーの型定義
 export interface APIError extends Error {
-  type: 'server_error' | 'network_error' | 'request_error';
+  type: 'server_error' | 'network_error' | 'timeout_error' | 'unknown_error';
   details: string;
   status?: number;
   isApiError: boolean;
 }
 
-// 既存の型を拡張して、エラー情報を含むようにする
+// エラー情報の型定義
 export interface ErrorInfo {
   message: string;
   details?: any;
+  suggestion?: string;
+}
+
+// 接続試行結果の型定義
+export interface ConnectionTestResult {
+  success: boolean;
+  message: string;
+  port?: number;
+  details?: any;
+}
+
+// APIヘルスレスポンスの型定義
+export interface HealthResponse {
+  status: string;
+  time: string;
+  version: string;
+  environment?: {
+    python_version: string;
+    os_info: string;
+    dashboard_file?: string;
+    dashboard_file_exists?: boolean;
+    file_error?: string;
+    app_path?: string;
+  };
+}
+
+// シャットダウンレスポンスの型定義
+export interface ShutdownResponse {
+  status: string;
 }

@@ -1,26 +1,292 @@
 import axios from 'axios';
 import { DashboardMetrics, Project, FileResponse, RecentTasks, HealthResponse, ShutdownResponse } from './types';
 
-// 環境に応じたAPI URLの設定
-const getApiBaseUrl = () => {
-  // デバッグメッセージ
-  console.log(`実行環境: ${typeof window !== 'undefined' ? 'ブラウザ' : 'サーバー'}`);
-  console.log(`環境変数: ${process.env.NEXT_PUBLIC_API_URL || '未設定'}`);
-  
-  // クライアントサイドでの判定
-  if (typeof window !== 'undefined') {
-    // Electron環境の検出
-    if (window.electron && window.electron.env && window.electron.env.isElectron) {
-      const url = window.electron.env.apiUrl || 'http://127.0.0.1:8000/api';
-      console.log(`Electron環境が検出されました、APIエンドポイント: ${url}`);
-      return url;
+// クライアントサイドのみの処理を判定するヘルパー関数
+const isClient = typeof window !== 'undefined';
+
+// ポート情報検出機能
+export const detectApiPort = async (): Promise<number | null> => {
+  try {
+    // サーバーサイドでは実行しない
+    if (!isClient) return null;
+    
+    console.log('APIポート自動検出を開始');
+    
+    // 1. 一時ファイルからポート情報を読み取る試み
+    if (window.electron && window.electron.fs) {
+      try {
+        const tempDir = typeof window.electron.getTempPath === 'function'
+          ? await window.electron.getTempPath()
+          : '/tmp';
+          
+        const portFilePath = window.electron.path.join(tempDir, "project_dashboard_port.txt");
+        
+        console.log(`ポート情報ファイルを確認: ${portFilePath}`);
+        
+        if (await window.electron.fs.exists(portFilePath)) {
+          const portData = await window.electron.fs.readFile(portFilePath, { encoding: 'utf8' });
+          const port = parseInt(portData.trim(), 10);
+          if (!isNaN(port) && port > 0) {
+            console.log(`ポートファイルから検出: ${port}`);
+            // 検出したポートが実際に応答するか確認
+            if (await isApiAvailable(port)) {
+              console.log(`ポート ${port} で応答を確認しました`);
+              // ローカルストレージに保存
+              try {
+                localStorage.setItem('api_port', port.toString());
+                localStorage.setItem('api_base_url', `http://127.0.0.1:${port}/api`);
+              } catch (e) {
+                console.warn('ポート情報のローカルストレージ保存に失敗:', e);
+              }
+              return port;
+            } else {
+              console.log(`ポート ${port} は応答しません。追加検証を試みます...`);
+              
+              // より長い待機時間で再試行
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              if (await isApiAvailable(port, 5000)) {
+                console.log(`ポート ${port} への2回目の接続試行に成功しました`);
+                return port;
+              }
+            }
+          }
+        } else {
+          console.log('ポート情報ファイルが見つかりません');
+        }
+      } catch (e) {
+        console.warn('ポートファイルの読み取りエラー:', e);
+      }
     }
     
-    // Window objectが存在する環境でのローカルストレージチェック
-    const savedApiUrl = localStorage.getItem('api_base_url');
-    if (savedApiUrl) {
-      console.log(`ローカルストレージからAPIエンドポイントを取得: ${savedApiUrl}`);
-      return savedApiUrl;
+    // 2. 複数の候補ポートを順次チェック (タイムアウト値を増加)
+    const ports = [8000, 8080, 8888, 8081, 8001, 3001, 5000];
+    console.log(`候補ポートを順次チェック: ${ports.join(', ')}`);
+    
+    for (const port of ports) {
+      try {
+        console.log(`ポート ${port} をチェック中...`);
+        // タイムアウト値を増加させた確認
+        if (await isApiAvailable(port, 5000)) {
+          console.log(`アクティブなAPIポートを検出: ${port}`);
+          // ローカルストレージに保存
+          try {
+            localStorage.setItem('api_port', port.toString());
+            localStorage.setItem('api_base_url', `http://127.0.0.1:${port}/api`);
+          } catch (e) {
+            console.warn('ポート情報のローカルストレージ保存に失敗:', e);
+          }
+          return port;
+        }
+      } catch (e) {
+        console.log(`ポート ${port} は応答しません`);
+      }
+    }
+    
+    // 3. ローカルストレージから以前の成功ポートを確認
+    if (window.localStorage) {
+      const savedPort = localStorage.getItem('api_port');
+      if (savedPort) {
+        const port = parseInt(savedPort, 10);
+        if (!isNaN(port)) {
+          console.log(`ローカルストレージから以前のポートを試行: ${port}`);
+          if (await isApiAvailable(port, 5000)) {
+            console.log(`保存されていたポート ${port} で応答を確認しました`);
+            return port;
+          }
+        }
+      }
+    }
+    
+    // ポートが見つからなかった
+    console.error('アクティブなAPIポートが見つかりませんでした');
+    return null;
+  } catch (e) {
+    console.error('APIポート検出エラー:', e);
+    return null;
+  }
+};
+
+// 改善: API利用可能性チェック関数
+const isApiAvailable = async (port: number, timeout: number = 3000): Promise<boolean> => {
+  // サーバーサイドでは実行しない
+  if (!isClient) return false;
+  
+  console.log(`ポート ${port} の可用性をチェック (タイムアウト: ${timeout}ms)`);
+  
+  // 複数の方法を並行して試す
+  try {
+    const results = await Promise.allSettled([
+      // 方法1: fetch API (ブラウザ環境)
+      window.fetch ? 
+        (async () => {
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeout);
+            
+            const response = await fetch(`http://127.0.0.1:${port}/api/health`, {
+              method: 'GET',
+              headers: { 'Accept': 'application/json' },
+              signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            return response.status >= 200 && response.status < 300;
+          } catch (e) {
+            return false;
+          }
+        })() : Promise.resolve(false),
+      
+      // 方法2: axios GET リクエスト
+      (async () => {
+        try {
+          const response = await axios.get(`http://127.0.0.1:${port}/api/health`, { 
+            timeout: timeout,
+            headers: { 'Accept': 'application/json' }
+          });
+          return response.status === 200;
+        } catch (e) {
+          return false;
+        }
+      })(),
+      
+      // 方法3: axios HEAD リクエスト (軽量なチェック)
+      (async () => {
+        try {
+          const response = await axios.head(`http://127.0.0.1:${port}/api/health`, { 
+            timeout: timeout / 2 // HEADリクエストは軽量なので短めのタイムアウト
+          });
+          return response.status < 500; // 500番台以外は応答と見なす
+        } catch (e) {
+          return false;
+        }
+      })(),
+      
+      // 方法4: XMLHttpRequest (古いブラウザ互換)
+      (async () => {
+        return new Promise<boolean>(resolve => {
+          if (typeof XMLHttpRequest === 'undefined') {
+            resolve(false);
+            return;
+          }
+          
+          const xhr = new XMLHttpRequest();
+          let resolved = false;
+          
+          xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4 && !resolved) {
+              resolved = true;
+              resolve(xhr.status >= 200 && xhr.status < 500);
+            }
+          };
+          
+          xhr.ontimeout = function() {
+            if (!resolved) {
+              resolved = true;
+              resolve(false);
+            }
+          };
+          
+          xhr.onerror = function() {
+            if (!resolved) {
+              resolved = true;
+              resolve(false);
+            }
+          };
+          
+          try {
+            xhr.open('HEAD', `http://127.0.0.1:${port}/api/health`, true);
+            xhr.timeout = timeout / 2;
+            xhr.send();
+          } catch (e) {
+            if (!resolved) {
+              resolved = true;
+              resolve(false);
+            }
+          }
+          
+          // バックアップタイムアウト
+          setTimeout(() => {
+            if (!resolved) {
+              resolved = true;
+              resolve(false);
+            }
+          }, timeout);
+        });
+      })()
+    ]);
+    
+    // いずれかの方法が成功していれば利用可能と判断
+    const isAvailable = results.some(
+      result => result.status === 'fulfilled' && result.value === true
+    );
+    
+    if (isAvailable) {
+      console.log(`ポート ${port} は利用可能です`);
+      return true;
+    }
+    
+    console.log(`ポート ${port} は応答しませんでした`);
+    return false;
+  } catch (e) {
+    console.error(`ポート ${port} の確認中にエラー:`, e);
+    return false;
+  }
+};
+
+// 環境に応じたAPI URLの設定
+const getApiBaseUrl = () => {
+  // サーバーサイドでは相対パスを返す
+  if (!isClient) {
+    return '/api';
+  }
+  
+  // Electron環境でグローバル変数からAPIベースURLを取得
+  if (window.electron && window.electron.getApiBaseUrl) {
+    try {
+      return window.electron.getApiBaseUrl();
+    } catch (e) {
+      console.warn('APIベースURL取得エラー:', e);
+    }
+  }
+  
+  // 開発環境では複数ポートを試す
+  if (process.env.NODE_ENV === 'development') {
+    console.log('開発環境を検出: 直接バックエンドURLを使用します');
+    // 現在のポートを使用（グローバル変数から取得）
+    if (window.currentApiPort) {
+      return `http://127.0.0.1:${window.currentApiPort}/api`;
+    }
+    return 'http://127.0.0.1:8000/api';
+  }
+  
+  // デバッグメッセージ
+  console.log(`実行環境: ブラウザ`);
+  console.log(`環境変数: ${process.env.NEXT_PUBLIC_API_URL || '未設定'}`);
+  console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
+  
+  // クライアントサイドでの判定
+  // Electron環境の検出
+  if (window.electron && window.electron.env && window.electron.env.isElectron) {
+    const url = window.electron.env.apiUrl || 'http://127.0.0.1:8000/api';
+    console.log(`Electron環境が検出されました、APIエンドポイント: ${url}`);
+    return url;
+  }
+  
+  // Window objectが存在する環境でのローカルストレージチェック
+  const savedApiUrl = localStorage.getItem('api_base_url');
+  if (savedApiUrl) {
+    console.log(`ローカルストレージからAPIエンドポイントを取得: ${savedApiUrl}`);
+    return savedApiUrl;
+  }
+  
+  // 保存されたポート番号の使用
+  const savedPort = localStorage.getItem('api_port');
+  if (savedPort) {
+    const port = parseInt(savedPort, 10);
+    if (!isNaN(port)) {
+      const url = `http://127.0.0.1:${port}/api`;
+      console.log(`保存されたポート番号を使用: ${url}`);
+      return url;
     }
   }
   
@@ -48,16 +314,40 @@ const apiClient = axios.create({
   baseURL: getApiBaseUrl(),
   headers: {
     'Content-Type': 'application/json',
+    'Accept': 'application/json'
   },
-  // タイムアウト設定を短くする（5秒→3秒）
-  timeout: 3000,
+  // タイムアウト設定を延長
+  timeout: 10000, // 10秒に延長
 });
+
+// ポートを更新する関数
+export const updateApiPort = (port: number): void => {
+  if (!isClient) return;
+  
+  window.currentApiPort = port;
+  apiClient.defaults.baseURL = `http://127.0.0.1:${port}/api`;
+  
+  // ローカルストレージに保存して再訪問時に使えるようにする
+  try {
+    localStorage.setItem('api_port', port.toString());
+    localStorage.setItem('api_base_url', apiClient.defaults.baseURL);
+  } catch (e) {
+    console.warn('ポート情報のローカルストレージ保存に失敗:', e);
+  }
+  
+  console.log(`APIベースURLを更新しました: ${apiClient.defaults.baseURL}`);
+};
 
 // リクエストインターセプター
 apiClient.interceptors.request.use(
   (config) => {
-    console.log(`🚀 リクエスト送信: ${config.method?.toUpperCase()} ${config.baseURL}${config.url}`, 
-               config.params || {});
+    const fullUrl = `${config.baseURL}${config.url}${config.params ? `?${new URLSearchParams(config.params).toString()}` : ''}`;
+    console.log(`🚀 リクエスト送信: ${config.method?.toUpperCase()} ${fullUrl}`, { 
+      headers: config.headers,
+      params: config.params || {},
+      data: config.data,
+      timeout: config.timeout
+    });
     return config;
   },
   (error) => {
@@ -123,46 +413,129 @@ apiClient.interceptors.response.use(
   }
 );
 
-// API接続テスト - より短いタイムアウトで素早く失敗するように
-export const testApiConnection = async (): Promise<{ success: boolean; message: string; details?: any }> => {
-  try {
-    console.log('API接続テスト実行中...');
-    const { data } = await apiClient.get<HealthResponse>('/health', { timeout: 2000 });
-    console.log('API接続テスト成功:', data);
+// API接続テスト - リトライ機能を改善
+export const testApiConnection = async (retryCount = 3): Promise<{ success: boolean; message: string; port?: number; details?: any }> => {
+  if (!isClient) {
     return {
-      success: true,
-      message: `API接続成功: ${data.status} (${data.version})`,
-      details: data
+      success: false,
+      message: 'クライアント側でのみ使用可能な機能です',
+      details: { error: 'SSR環境で実行されました' }
     };
-  } catch (error: any) {
-    console.error('API接続テスト失敗:', error);
+  }
+  
+  console.log(`API接続テスト開始 (最大試行回数: ${retryCount})`);
+  
+  // 自動ポート検出試行
+  const detectedPort = await detectApiPort();
+  if (detectedPort) {
+    // 検出したポートを設定
+    updateApiPort(detectedPort);
+    console.log(`ポート ${detectedPort} で応答するAPIを検出しました`);
     
-    if (error.code === 'ECONNABORTED') {
+    try {
+      // 確認のための健全性チェック
+      const { data } = await axios({
+        method: 'GET',
+        url: `http://127.0.0.1:${detectedPort}/api/health`,
+        timeout: 5000,
+        headers: { 'Accept': 'application/json' }
+      });
+      
+      console.log('API接続テスト成功:', data);
       return {
-        success: false,
-        message: 'APIサーバーへの接続がタイムアウトしました。サーバーが起動しているか確認してください。',
-        details: error
+        success: true,
+        message: `API接続成功: ${data.status || 'OK'} ${data.version ? `(${data.version})` : ''}`,
+        port: detectedPort,
+        details: data
       };
-    } else if (error.code === 'ERR_NETWORK') {
+    } catch (err) {
+      // ポートは検出されたが健全性チェックに失敗
+      console.warn(`ポート ${detectedPort} は検出されましたが、健全性チェックに失敗しました:`, err);
+      
+      // それでも接続は成功とみなす（サーバーが起動中かもしれない）
       return {
-        success: false,
-        message: 'APIサーバーに接続できません。サーバーが起動しているか確認してください。',
-        details: error
-      };
-    } else if (error.response) {
-      return {
-        success: false,
-        message: `APIエラー: ${error.response.status} - ${error.response.statusText}`,
-        details: error.response.data
-      };
-    } else {
-      return {
-        success: false,
-        message: `API接続エラー: ${error.message}`,
-        details: error
+        success: true,
+        message: `API検出成功 (ポート ${detectedPort}) - 部分的な接続`,
+        port: detectedPort,
+        details: { warning: "健全性チェックに失敗しましたが、APIは検出されました" }
       };
     }
   }
+  
+  let attempts = 0;
+  let lastError = null;
+  
+  // 複数のポートを試す
+  const ports = [8000, 8080, 8888, 8081, 8001, 3001, 5000];
+  
+  for (const port of ports) {
+    if (attempts >= retryCount) break;
+    
+    try {
+      console.log(`API接続テスト実行中... ポート: ${port} (試行: ${attempts + 1}/${retryCount})`);
+      
+      // 一時的にAPIベースURLを変更して接続試行
+      const { data } = await axios({
+        method: 'GET',
+        url: `http://127.0.0.1:${port}/api/health`,
+        timeout: 5000 + (attempts * 2000), // リトライごとにタイムアウトを延長
+        headers: { 'Accept': 'application/json' }
+      });
+      
+      console.log(`ポート ${port} での接続テスト成功:`, data);
+      
+      // 成功したポートを保存
+      updateApiPort(port);
+      
+      return {
+        success: true,
+        message: `API接続成功: ${data.status || 'OK'} ${data.version ? `(${data.version})` : ''}`,
+        port: port,
+        details: data
+      };
+    } catch (error: any) {
+      console.warn(`ポート ${port} への接続テスト失敗:`, error);
+      lastError = error;
+      attempts++;
+      
+      // 待機時間を増やしながらリトライ
+      if (attempts < retryCount && port === ports[ports.length - 1]) {
+        const waitTime = attempts * 2000;
+        console.log(`${waitTime}ms 待機後に再試行します...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+    }
+  }
+  
+  // ユーザーフレンドリーなエラーメッセージ
+  console.error('API接続テスト最終失敗:', lastError);
+  
+  let errorMessage = 'APIサーバーに接続できません。';
+  let errorType = 'unknown';
+  
+  if (lastError) {
+    if (lastError.code === 'ECONNABORTED') {
+      errorType = 'timeout';
+      errorMessage += ' サーバーの応答がタイムアウトしました。サーバーが起動中か、負荷が高い可能性があります。';
+    } else if (lastError.code === 'ERR_NETWORK') {
+      errorType = 'network';
+      errorMessage += ' ネットワーク接続に問題があります。サーバーが起動していない可能性があります。';
+    } else if (lastError.response) {
+      errorType = 'server';
+      errorMessage += ` サーバーがエラーを返しました: ${lastError.response.status} ${lastError.response.statusText}`;
+    }
+  }
+  
+  return {
+    success: false,
+    message: errorMessage,
+    details: {
+      error: lastError,
+      type: errorType,
+      attemptsMade: attempts,
+      portsChecked: ports.slice(0, attempts)
+    }
+  };
 };
 
 // プロジェクト一覧の取得
@@ -283,19 +656,113 @@ export const openFile = async (path: string): Promise<FileResponse> => {
   }
 };
 
+// ブラウザのファイル入力要素を使った選択
+const selectFileUsingBrowser = (): Promise<FileResponse> => {
+  if (!isClient) {
+    return Promise.resolve({
+      success: false,
+      message: 'ブラウザ環境でのみ使用可能です',
+      path: null
+    });
+  }
+
+  return new Promise((resolve) => {
+    // 一時的なファイル入力要素を作成
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.csv';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+
+    // ファイル選択イベント
+    input.onchange = (event) => {
+      const files = (event.target as HTMLInputElement).files;
+      
+      // 要素を削除
+      document.body.removeChild(input);
+      
+      if (files && files.length > 0) {
+        // FileオブジェクトからURLを作成（表示用）
+        const file = files[0];
+        const fileName = file.name;
+        
+        // 開発環境ではファイルのパスは取得できないが、名前は取得可能
+        resolve({
+          success: true,
+          message: `ファイルを選択しました: ${fileName}`,
+          path: fileName // 本来はパスだが、開発環境ではファイル名のみ
+        });
+      } else {
+        resolve({
+          success: false,
+          message: 'ファイルが選択されませんでした',
+          path: null
+        });
+      }
+    };
+
+    // キャンセル処理
+    input.oncancel = () => {
+      document.body.removeChild(input);
+      resolve({
+        success: false,
+        message: 'ファイル選択がキャンセルされました',
+        path: null
+      });
+    };
+
+    // クリックイベントをトリガー
+    input.click();
+  });
+};
+
 // ファイル選択ダイアログを表示する
 export const selectFile = async (initialPath?: string): Promise<FileResponse> => {
   try {
-    console.log(`ファイル選択ダイアログ表示... initialPath: ${initialPath || 'なし'}`);
-    const { data } = await apiClient.get<FileResponse>('/files/select', {
-      params: { initial_path: initialPath }
+    console.log('[API] ファイル選択ダイアログ表示リクエスト開始', { 
+      initialPath: initialPath || 'なし',
+      apiUrl: getCurrentApiUrl()
     });
-    console.log(`ファイル選択結果: ${data.success ? '選択成功' : '選択キャンセルまたは失敗'}`);
+    
+    // サーバーサイドでは早期リターン
+    if (!isClient) {
+      return {
+        success: false,
+        message: 'クライアント側でのみ使用可能な機能です',
+        path: null
+      };
+    }
+    
+    // 開発環境かどうかをチェック
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[API] 開発環境を検出、ブラウザのファイル選択を使用します');
+      return await selectFileUsingBrowser();
+    }
+    
+    // Electron環境かどうかをチェック
+    if (window.electron && window.electron.dialog) {
+      console.log('[API] Electron環境を検出、Electronダイアログを使用します');
+      return await window.electron.dialog.openCSVFile(initialPath || '');
+    }
+    
+    // それ以外の場合はAPIを使用
+    console.log('[API] APIベースのファイル選択を使用します');
+    const { data } = await apiClient.get<FileResponse>('/files/select', {
+      params: { initial_path: initialPath },
+      timeout: 30000 // ファイル選択には時間がかかる可能性があるため、長めのタイムアウト
+    });
+    
     return data;
   } catch (error: any) {
-    console.error('ファイル選択失敗:', error);
+    console.error('[API] ファイル選択リクエストエラー:', error);
     
-    // エラーが発生してもFileResponse形式で返す
+    // エラー発生時はブラウザのファイル選択にフォールバック
+    if (isClient) {
+      console.log('[API] エラー発生、ブラウザのファイル選択を使用します');
+      return await selectFileUsingBrowser();
+    }
+    
+    // フォールバックもできない場合はエラーレスポンスを返す
     return {
       success: false,
       message: error.isApiError
@@ -306,18 +773,42 @@ export const selectFile = async (initialPath?: string): Promise<FileResponse> =>
   }
 };
 
-// APIの健全性をチェック
-export const healthCheck = async (): Promise<HealthResponse> => {
+// ファイルアップロード
+export const uploadCSVFile = async (file: File): Promise<FileResponse> => {
+  if (!isClient) {
+    return {
+      success: false,
+      message: 'クライアント側でのみ使用可能な機能です',
+      path: null
+    };
+  }
+  
   try {
-    console.log('APIヘルスチェック実行中...');
-    const { data } = await apiClient.get<HealthResponse>('/health');
-    console.log('APIヘルスチェック成功:', data);
+    console.log('[API] CSVファイルアップロード開始');
+    
+    // FormDataを作成
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    // APIにアップロード
+    const { data } = await apiClient.post<FileResponse>('/files/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      },
+      timeout: 30000 // ファイルアップロードには時間がかかる可能性があるため、長めのタイムアウト
+    });
+    
+    console.log('[API] ファイルアップロード成功:', data);
     return data;
   } catch (error: any) {
-    console.error('APIヘルスチェック失敗:', error);
-    throw new Error(error.isApiError 
-      ? `健全性チェックエラー: ${error.details}` 
-      : `健全性チェック中に予期しないエラーが発生しました: ${error.message}`);
+    console.error('[API] ファイルアップロードエラー:', error);
+    return {
+      success: false,
+      message: error.isApiError
+        ? `ファイルアップロードエラー: ${error.details}`
+        : `ファイルアップロード中に予期しないエラーが発生しました: ${error.message}`,
+      path: null
+    };
   }
 };
 
@@ -335,3 +826,6 @@ export const requestShutdown = async (): Promise<ShutdownResponse> => {
       : `シャットダウンリクエスト中に予期しないエラーが発生しました: ${error.message}`);
   }
 };
+
+// 後方互換性のためのエイリアス
+export const healthCheck = testApiConnection;
