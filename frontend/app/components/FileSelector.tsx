@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
-import { selectFile, uploadCSVFile } from '@/app/lib/api';
+import { selectFile, uploadCSVFile } from '@/app/lib/services';
 import { useNotification } from '@/app/contexts/NotificationContext';
 
 interface FileSelectorProps {

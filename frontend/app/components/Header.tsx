@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { usePathname } from 'next/navigation';
-import { getDefaultPath } from '@/app/lib/api';
+import { getDefaultPath } from '@/app/lib/services';
 import { useNotification } from '@/app/contexts/NotificationContext';
 
 interface HeaderProps {

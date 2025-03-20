@@ -121,8 +121,11 @@ async def lifespan(app: FastAPI):
     """アプリケーションのライフスパンイベントを管理する"""
     # 起動時の処理
     logger.info("APIサーバーを起動しました")
-    logger.info(f"アプリケーションURL: http://127.0.0.1:{app.state.port}")
-    logger.info(f"APIドキュメント: http://127.0.0.1:{app.state.port}/docs")
+    
+    # ポートを安全に取得
+    port = getattr(app.state, 'port', '不明')
+    logger.info(f"アプリケーションURL: http://127.0.0.1:{port}")
+    logger.info(f"APIドキュメント: http://127.0.0.1:{port}/docs")
     
     # データディレクトリのチェック
     data_dir = Path(os.getcwd()) / "data" / "exports"
@@ -142,7 +145,7 @@ async def lifespan(app: FastAPI):
     try:
         port_file_path = os.path.join(tempfile.gettempdir(), "project_dashboard_port.txt")
         with open(port_file_path, "w") as f:
-            f.write(str(app.state.port))
+            f.write(str(port))
         logger.info(f"ポート情報をファイルに保存しました: {port_file_path}")
     except Exception as e:
         logger.error(f"ポート情報ファイルの作成エラー: {str(e)}")

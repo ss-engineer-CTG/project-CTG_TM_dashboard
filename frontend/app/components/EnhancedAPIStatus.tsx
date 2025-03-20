@@ -2,23 +2,21 @@
 
 import React, { useState, useEffect } from 'react';
 import { APIConnectionStatus } from '@/app/lib/types';
+import { useApi } from '@/app/contexts/ApiContext';
 
 // クライアントサイドのみの処理を判定するヘルパー関数
 const isClient = typeof window !== 'undefined';
 
 interface EnhancedAPIStatusProps {
-  status: APIConnectionStatus;
   onRetry: () => void;
-  reconnectAttempts: number;
 }
 
-const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ 
-  status, 
-  onRetry, 
-  reconnectAttempts 
-}) => {
+const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [countdown, setCountdown] = useState(0);
+  
+  // APIコンテキストから状態を取得
+  const { status, reconnectAttempts, checkConnection } = useApi();
   
   // 自動再接続のカウントダウン - クライアントサイドでのみ実行
   useEffect(() => {
@@ -55,7 +53,8 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({
     
     setIsReconnecting(true);
     try {
-      await onRetry();
+      await checkConnection();
+      onRetry();
     } finally {
       setIsReconnecting(false);
     }

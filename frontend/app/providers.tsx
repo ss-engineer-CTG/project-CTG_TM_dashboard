@@ -2,6 +2,9 @@
 
 import React from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
+import { ApiProvider } from './contexts/ApiContext';
+import { NotificationProvider } from './contexts/NotificationContext';
+import Notification from './components/Notification';
 
 export function Providers({ children }: { children: React.ReactNode }) {
   // QueryClientをメモ化して再レンダリング時に再作成されないようにする
@@ -16,7 +19,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {children}
+      <NotificationProvider>
+        <ApiProvider>
+          {children}
+        </ApiProvider>
+        <Notification />
+      </NotificationProvider>
     </QueryClientProvider>
   );
 }

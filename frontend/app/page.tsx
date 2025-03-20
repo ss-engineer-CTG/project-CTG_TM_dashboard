@@ -10,18 +10,21 @@ import DurationChart from './components/DurationChart';
 import ConnectionError from './components/ConnectionError';
 import ErrorMessage from './components/ErrorMessage';
 import EnhancedAPIStatus from './components/EnhancedAPIStatus';
-import { getDefaultPath, healthCheck, getCurrentApiUrl, testApiConnection, updateApiPort } from './lib/api';
+import { getDefaultPath, testApiConnection } from './lib/services';
 import { useNotification } from './contexts/NotificationContext';
+import { useApi } from './contexts/ApiContext';
 import { APIConnectionStatus } from './lib/types';
 
 // クライアントサイドのみの処理を判定するヘルパー関数
 const isClient = typeof window !== 'undefined';
 
-// グローバルに追加: 現在のAPIポート (サーバー接続後に更新)
-if (isClient) {
-  // サーバーサイドレンダリング時にはwindowが存在しないため、クライアント側でのみ定義
-  window.currentApiPort = window.currentApiPort || undefined;
-}
+// Electron環境検出のヘルパー
+const isElectronEnvironment = (): boolean => {
+  return isClient && 
+         window.electron && 
+         typeof window.electron === 'object' &&
+         !!Object.keys(window.electron).length;
+};
 
 const FirstTimeUserGuide: React.FC<{onClose: () => void}> = ({onClose}) => {
   return (
@@ -73,19 +76,19 @@ export default function Home() {
   const [connectionAttempts, setConnectionAttempts] = useState<number>(0);
   const [triedPorts, setTriedPorts] = useState<number[]>([]);
   const [showGuide, setShowGuide] = useState<boolean>(false);
-  const [reconnectAttempts, setReconnectAttempts] = useState<number>(0);
   const { addNotification } = useNotification();
+  
+  // APIコンテキストから状態を取得
+  const { status: apiStatus, reconnectAttempts, checkConnection: checkApiConnection } = useApi();
 
   // カスタムフックから状態と関数を取得
   const { 
     projects, 
     metrics, 
     isLoading, 
-    apiStatus, 
     error, 
     refreshData, 
-    openFile, 
-    checkApiConnection 
+    openFile 
   } = useProjects(selectedFilePath);
 
   // 初回レンダリング時にAPIの健全性をチェックしてデフォルトのファイルパスを取得
@@ -97,21 +100,15 @@ export default function Home() {
     const initializeApp = async () => {
       try {
         setConnectionAttempts(prev => prev + 1);
-        // APIの健全性をチェック - 複数ポートを試行
-        let connected = false;
+        
+        // APIの健全性をチェック
         const ports = [8000, 8080, 8888, 8081, 8001, 3001, 5000];
         setTriedPorts(ports);
         
-        // 自動接続試行
-        const connectionResult = await testApiConnection(3);
-        if (connectionResult.success) {
-          connected = true;
-          if (connectionResult.port) {
-            updateApiPort(connectionResult.port);
-          }
-        }
+        // API接続をチェック
+        const isConnected = await checkApiConnection();
         
-        if (!connected) {
+        if (!isConnected) {
           // エラーメッセージの表示とヘルプの提供
           setInitError({
             message: 'バックエンドサーバーに接続できません。',
@@ -165,55 +162,7 @@ export default function Home() {
     };
     
     initializeApp();
-
-    // IPC通信リスナーの設定 (Electron環境)
-    const setupIpcListeners = () => {
-      if (window.electron && window.electron.ipcRenderer) {
-        // API接続確立メッセージのリスナー
-        const handleConnectionEstablished = (data: { port: number, apiUrl: string }) => {
-          console.log('API接続確立メッセージを受信:', data);
-          addNotification(`バックエンドサーバーに接続しました (ポート: ${data.port})`, 'success');
-          setInitError(null);
-          setReconnectAttempts(0);
-          
-          // データの再取得
-          refreshData();
-        };
-        
-        // APIサーバーダウンメッセージのリスナー
-        const handleServerDown = (data: { message: string }) => {
-          console.warn('APIサーバーダウンメッセージを受信:', data);
-          addNotification('バックエンドサーバーとの接続が切断されました', 'error');
-          setReconnectAttempts(prev => prev + 1);
-        };
-        
-        // リスナーの登録
-        const removeConnectionListener = window.electron.ipcRenderer.on(
-          'api-connection-established',
-          handleConnectionEstablished
-        );
-        
-        const removeServerDownListener = window.electron.ipcRenderer.on(
-          'api-server-down',
-          handleServerDown
-        );
-        
-        // クリーンアップ関数
-        return () => {
-          if (removeConnectionListener) removeConnectionListener();
-          if (removeServerDownListener) removeServerDownListener();
-        };
-      }
-      
-      return undefined;
-    };
-    
-    const cleanupListeners = setupIpcListeners();
-    
-    return () => {
-      if (cleanupListeners) cleanupListeners();
-    };
-  }, [addNotification, refreshData]);
+  }, [addNotification, checkApiConnection]);
 
   // 接続再試行
   const handleRetryConnection = async () => {
@@ -228,15 +177,13 @@ export default function Home() {
       // ユーザーにフィードバック
       addNotification(`バックエンドサーバーへの接続を再試行しています...(${waitTime}ms 待機)`, 'info');
       
-      // 接続試行
-      const result = await testApiConnection(3);
+      // 待機
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+      
+      // 接続試行 - 新しいAPI機能を使用
+      const result = await testApiConnection();
       if (result.success) {
         addNotification('APIサーバーに接続しました', 'success');
-        setReconnectAttempts(0);
-        
-        if (result.port) {
-          updateApiPort(result.port);
-        }
         
         // デフォルトパスを取得
         const response = await getDefaultPath();
@@ -256,8 +203,6 @@ export default function Home() {
         } else {
           addNotification('APIサーバーに接続できません。', 'error');
         }
-        
-        setReconnectAttempts(prev => prev + 1);
       }
     } catch (error: any) {
       console.error('接続再試行エラー:', error);
@@ -266,7 +211,6 @@ export default function Home() {
         details: error
       });
       addNotification('APIサーバーへの接続試行中にエラーが発生しました。', 'error');
-      setReconnectAttempts(prev => prev + 1);
     } finally {
       setIsInitializing(false);
     }
@@ -274,14 +218,9 @@ export default function Home() {
 
   // APIステータスの再試行ハンドラー
   const handleApiStatusRetry = async () => {
-    setReconnectAttempts(prev => prev + 1);
-    
-    // 再接続の試行間隔を調整 (試行回数に応じて)
-    const retryDelay = Math.min(reconnectAttempts * 1000, 3000);
-    
     try {
       addNotification('バックエンドサーバーへの再接続を試みています...', 'info');
-      await checkApiConnection(retryDelay);
+      await checkApiConnection();
     } catch (error) {
       console.error('API再接続エラー:', error);
       addNotification('バックエンドサーバーへの再接続に失敗しました', 'error');
@@ -291,12 +230,6 @@ export default function Home() {
   // ファイル選択ハンドラー
   const handleSelectFile = (path: string) => {
     setSelectedFilePath(path);
-  };
-
-  // デバッグ情報のAPIポート取得 - クライアントサイドのみ
-  const getCurrentApiPort = () => {
-    if (!isClient) return '不明';
-    return window.currentApiPort || '不明';
   };
 
   return (
@@ -311,9 +244,7 @@ export default function Home() {
       <div className="max-w-7xl mx-auto px-4 py-6">
         {/* API接続ステータス - 拡張コンポーネントを使用 */}
         <EnhancedAPIStatus 
-          status={apiStatus} 
           onRetry={handleApiStatusRetry} 
-          reconnectAttempts={reconnectAttempts} 
         />
         
         {/* 初期化エラー - 接続エラーの場合は専用コンポーネント */}
@@ -328,6 +259,7 @@ export default function Home() {
           <ErrorMessage 
             message={initError.message} 
             details={initError.details}
+            onRetry={handleRetryConnection}
             suggestion="アプリケーションを再起動するか、別のCSVファイルを選択してください。"
           />
         ) : null}
@@ -379,9 +311,7 @@ export default function Home() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-gray-400">
               <div>
                 <p><span className="text-gray-300">環境: </span>{process.env.NODE_ENV}</p>
-                <p><span className="text-gray-300">API URL: </span>{getCurrentApiUrl()}</p>
                 <p><span className="text-gray-300">ファイルパス: </span>{selectedFilePath || 'なし'}</p>
-                <p><span className="text-gray-300">現在のAPIポート: </span>{getCurrentApiPort()}</p>
               </div>
               <div>
                 <p><span className="text-gray-300">API状態: </span>{apiStatus.message}</p>

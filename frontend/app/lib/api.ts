@@ -4,6 +4,17 @@ import { DashboardMetrics, Project, FileResponse, RecentTasks, HealthResponse, S
 // クライアントサイドのみの処理を判定するヘルパー関数
 const isClient = typeof window !== 'undefined';
 
+// API初期化状態を追跡するためのPromise
+let apiInitializationPromise: Promise<string> | null = null;
+
+// Electron環境検出の堅牢な実装
+const isElectronEnvironment = (): boolean => {
+  return isClient && 
+         window.electron && 
+         typeof window.electron === 'object' &&
+         !!Object.keys(window.electron).length;
+};
+
 // ポート情報検出機能
 export const detectApiPort = async (): Promise<number | null> => {
   try {
@@ -13,13 +24,13 @@ export const detectApiPort = async (): Promise<number | null> => {
     console.log('APIポート自動検出を開始');
     
     // 1. 一時ファイルからポート情報を読み取る試み
-    if (window.electron && window.electron.fs) {
+    if (isElectronEnvironment()) {
       try {
-        const tempDir = typeof window.electron.getTempPath === 'function'
+        const tempDir = typeof window.electron?.getTempPath === 'function'
           ? await window.electron.getTempPath()
           : '/tmp';
           
-        const portFilePath = window.electron.path.join(tempDir, "project_dashboard_port.txt");
+        const portFilePath = await window.electron.path.join(tempDir, "project_dashboard_port.txt");
         
         console.log(`ポート情報ファイルを確認: ${portFilePath}`);
         
@@ -83,17 +94,21 @@ export const detectApiPort = async (): Promise<number | null> => {
     }
     
     // 3. ローカルストレージから以前の成功ポートを確認
-    if (window.localStorage) {
-      const savedPort = localStorage.getItem('api_port');
-      if (savedPort) {
-        const port = parseInt(savedPort, 10);
-        if (!isNaN(port)) {
-          console.log(`ローカルストレージから以前のポートを試行: ${port}`);
-          if (await isApiAvailable(port, 5000)) {
-            console.log(`保存されていたポート ${port} で応答を確認しました`);
-            return port;
+    if (isClient) {
+      try {
+        const savedPort = localStorage.getItem('api_port');
+        if (savedPort) {
+          const port = parseInt(savedPort, 10);
+          if (!isNaN(port)) {
+            console.log(`ローカルストレージから以前のポートを試行: ${port}`);
+            if (await isApiAvailable(port, 5000)) {
+              console.log(`保存されていたポート ${port} で応答を確認しました`);
+              return port;
+            }
           }
         }
+      } catch (e) {
+        console.warn('ローカルストレージアクセスエラー:', e);
       }
     }
     
@@ -117,24 +132,25 @@ const isApiAvailable = async (port: number, timeout: number = 3000): Promise<boo
   try {
     const results = await Promise.allSettled([
       // 方法1: fetch API (ブラウザ環境)
-      window.fetch ? 
-        (async () => {
-          try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), timeout);
-            
-            const response = await fetch(`http://127.0.0.1:${port}/api/health`, {
-              method: 'GET',
-              headers: { 'Accept': 'application/json' },
-              signal: controller.signal
-            });
-            
-            clearTimeout(timeoutId);
-            return response.status >= 200 && response.status < 300;
-          } catch (e) {
-            return false;
-          }
-        })() : Promise.resolve(false),
+      (async () => {
+        if (!isClient || !window.fetch) return false;
+        
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), timeout);
+          
+          const response = await fetch(`http://127.0.0.1:${port}/api/health`, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+            signal: controller.signal
+          });
+          
+          clearTimeout(timeoutId);
+          return response.status >= 200 && response.status < 300;
+        } catch (e) {
+          return false;
+        }
+      })(),
       
       // 方法2: axios GET リクエスト
       (async () => {
@@ -164,7 +180,7 @@ const isApiAvailable = async (port: number, timeout: number = 3000): Promise<boo
       // 方法4: XMLHttpRequest (古いブラウザ互換)
       (async () => {
         return new Promise<boolean>(resolve => {
-          if (typeof XMLHttpRequest === 'undefined') {
+          if (!isClient || typeof XMLHttpRequest === 'undefined') {
             resolve(false);
             return;
           }
@@ -234,16 +250,17 @@ const isApiAvailable = async (port: number, timeout: number = 3000): Promise<boo
 };
 
 // 環境に応じたAPI URLの設定
-const getApiBaseUrl = () => {
+const getApiBaseUrl = async (): Promise<string> => {
   // サーバーサイドでは相対パスを返す
   if (!isClient) {
     return '/api';
   }
   
   // Electron環境でグローバル変数からAPIベースURLを取得
-  if (window.electron && window.electron.getApiBaseUrl) {
+  if (isElectronEnvironment() && typeof window.electron?.getApiBaseUrl === 'function') {
     try {
-      return window.electron.getApiBaseUrl();
+      const url = await window.electron.getApiBaseUrl();
+      return url;
     } catch (e) {
       console.warn('APIベースURL取得エラー:', e);
     }
@@ -253,7 +270,7 @@ const getApiBaseUrl = () => {
   if (process.env.NODE_ENV === 'development') {
     console.log('開発環境を検出: 直接バックエンドURLを使用します');
     // 現在のポートを使用（グローバル変数から取得）
-    if (window.currentApiPort) {
+    if (isClient && window.currentApiPort) {
       return `http://127.0.0.1:${window.currentApiPort}/api`;
     }
     return 'http://127.0.0.1:8000/api';
@@ -266,27 +283,33 @@ const getApiBaseUrl = () => {
   
   // クライアントサイドでの判定
   // Electron環境の検出
-  if (window.electron && window.electron.env && window.electron.env.isElectron) {
+  if (isElectronEnvironment() && window.electron?.env?.isElectron) {
     const url = window.electron.env.apiUrl || 'http://127.0.0.1:8000/api';
     console.log(`Electron環境が検出されました、APIエンドポイント: ${url}`);
     return url;
   }
   
   // Window objectが存在する環境でのローカルストレージチェック
-  const savedApiUrl = localStorage.getItem('api_base_url');
-  if (savedApiUrl) {
-    console.log(`ローカルストレージからAPIエンドポイントを取得: ${savedApiUrl}`);
-    return savedApiUrl;
-  }
-  
-  // 保存されたポート番号の使用
-  const savedPort = localStorage.getItem('api_port');
-  if (savedPort) {
-    const port = parseInt(savedPort, 10);
-    if (!isNaN(port)) {
-      const url = `http://127.0.0.1:${port}/api`;
-      console.log(`保存されたポート番号を使用: ${url}`);
-      return url;
+  if (isClient) {
+    try {
+      const savedApiUrl = localStorage.getItem('api_base_url');
+      if (savedApiUrl) {
+        console.log(`ローカルストレージからAPIエンドポイントを取得: ${savedApiUrl}`);
+        return savedApiUrl;
+      }
+      
+      // 保存されたポート番号の使用
+      const savedPort = localStorage.getItem('api_port');
+      if (savedPort) {
+        const port = parseInt(savedPort, 10);
+        if (!isNaN(port)) {
+          const url = `http://127.0.0.1:${port}/api`;
+          console.log(`保存されたポート番号を使用: ${url}`);
+          return url;
+        }
+      }
+    } catch (e) {
+      console.warn('ローカルストレージアクセスエラー:', e);
     }
   }
   
@@ -301,17 +324,49 @@ const getApiBaseUrl = () => {
   return '/api';
 };
 
-// 現在のAPIベースURLを取得
-export const getCurrentApiUrl = (): string => {
-  // APIベースURLをログに出力
-  const url = getApiBaseUrl();
-  console.log(`現在のAPIベースURL: ${url}`);
-  return url;
+// 現在のAPIベースURLを非同期で取得するように修正
+export const getCurrentApiUrl = async (): Promise<string> => {
+  try {
+    // APIベースURLをログに出力
+    const url = await getApiBaseUrl();
+    console.log(`現在のAPIベースURL: ${url}`);
+    return url;
+  } catch (error) {
+    console.error('API URL取得エラー:', error);
+    return '/api'; // エラー時のフォールバック
+  }
+};
+
+// API初期化を行う関数
+const initializeApi = async (): Promise<string> => {
+  if (!isClient) return '/api';
+  
+  if (!apiInitializationPromise) {
+    apiInitializationPromise = new Promise<string>(async (resolve) => {
+      try {
+        // APIベースURLを取得
+        const baseURL = await getApiBaseUrl();
+        console.log(`API初期化: ${baseURL}`);
+        
+        // APIクライアントを設定
+        apiClient.defaults.baseURL = baseURL;
+        window.apiInitialized = true;
+        
+        resolve(baseURL);
+      } catch (error) {
+        console.error('API初期化エラー:', error);
+        window.apiInitialized = false;
+        resolve('/api'); // デフォルト値
+      }
+    });
+  }
+  
+  return apiInitializationPromise;
 };
 
 // APIクライアントのベース設定
 const apiClient = axios.create({
-  baseURL: getApiBaseUrl(),
+  baseURL: '/api', // 初期値として安全な相対パスを設定
   headers: {
     'Content-Type': 'application/json',
     'Accept': 'application/json'
@@ -320,12 +375,35 @@ const apiClient = axios.create({
   timeout: 10000, // 10秒に延長
 });
 
+// 初期化時にAPI設定を行う
+if (isClient) {
+  initializeApi();
+}
+
+// API呼び出しを行う前に初期化を確認するラッパー
+const ensureApiInitialized = async <T>(
+  apiCall: () => Promise<T>
+): Promise<T> => {
+  if (!isClient) {
+    throw new Error('This function can only be called in client-side code');
+  }
+  
+  // API初期化が完了していない場合は待機
+  if (!window.apiInitialized) {
+    await initializeApi();
+  }
+  
+  // API呼び出しを実行
+  return apiCall();
+};
+
 // ポートを更新する関数
 export const updateApiPort = (port: number): void => {
   if (!isClient) return;
   
   window.currentApiPort = port;
   apiClient.defaults.baseURL = `http://127.0.0.1:${port}/api`;
+  window.apiInitialized = true;
   
   // ローカルストレージに保存して再訪問時に使えるようにする
   try {
@@ -540,120 +618,132 @@ export const testApiConnection = async (retryCount = 3): Promise<{ success: bool
 
 // プロジェクト一覧の取得
 export const getProjects = async (filePath?: string): Promise<Project[]> => {
-  try {
-    console.log(`プロジェクト一覧取得中... filePath: ${filePath || 'なし'}`);
-    const { data } = await apiClient.get<Project[]>('/projects', {
-      params: { file_path: filePath }
-    });
-    console.log(`プロジェクト一覧取得成功: ${data.length}件`);
-    return data;
-  } catch (error: any) {
-    const errorMessage = error.isApiError 
-      ? `プロジェクト取得エラー: ${error.details}`
-      : `プロジェクト取得中に予期しないエラーが発生しました: ${error.message}`;
-    
-    console.error('プロジェクト一覧取得失敗:', error);
-    throw new Error(errorMessage);
-  }
+  return ensureApiInitialized(async () => {
+    try {
+      console.log(`プロジェクト一覧取得中... filePath: ${filePath || 'なし'}`);
+      const { data } = await apiClient.get<Project[]>('/projects', {
+        params: { file_path: filePath }
+      });
+      console.log(`プロジェクト一覧取得成功: ${data.length}件`);
+      return data;
+    } catch (error: any) {
+      const errorMessage = error.isApiError 
+        ? `プロジェクト取得エラー: ${error.details}`
+        : `プロジェクト取得中に予期しないエラーが発生しました: ${error.message}`;
+      
+      console.error('プロジェクト一覧取得失敗:', error);
+      throw new Error(errorMessage);
+    }
+  });
 };
 
 // プロジェクト詳細の取得
 export const getProject = async (projectId: string, filePath?: string): Promise<Project> => {
-  try {
-    console.log(`プロジェクト詳細取得中... projectId: ${projectId}, filePath: ${filePath || 'なし'}`);
-    const { data } = await apiClient.get<Project>(`/projects/${projectId}`, {
-      params: { file_path: filePath }
-    });
-    console.log(`プロジェクト詳細取得成功: ${data.project_name}`);
-    return data;
-  } catch (error: any) {
-    const errorMessage = error.isApiError
-      ? `プロジェクト詳細取得エラー: ${error.details}`
-      : `プロジェクト詳細取得中に予期しないエラーが発生しました: ${error.message}`;
-    
-    console.error('プロジェクト詳細取得失敗:', error);
-    throw new Error(errorMessage);
-  }
+  return ensureApiInitialized(async () => {
+    try {
+      console.log(`プロジェクト詳細取得中... projectId: ${projectId}, filePath: ${filePath || 'なし'}`);
+      const { data } = await apiClient.get<Project>(`/projects/${projectId}`, {
+        params: { file_path: filePath }
+      });
+      console.log(`プロジェクト詳細取得成功: ${data.project_name}`);
+      return data;
+    } catch (error: any) {
+      const errorMessage = error.isApiError
+        ? `プロジェクト詳細取得エラー: ${error.details}`
+        : `プロジェクト詳細取得中に予期しないエラーが発生しました: ${error.message}`;
+      
+      console.error('プロジェクト詳細取得失敗:', error);
+      throw new Error(errorMessage);
+    }
+  });
 };
 
 // プロジェクトの直近タスク情報を取得
 export const getRecentTasks = async (projectId: string, filePath?: string): Promise<RecentTasks> => {
-  try {
-    console.log(`最近のタスク取得中... projectId: ${projectId}, filePath: ${filePath || 'なし'}`);
-    const { data } = await apiClient.get<RecentTasks>(`/projects/${projectId}/recent-tasks`, {
-      params: { file_path: filePath }
-    });
-    console.log('最近のタスク取得成功');
-    return data;
-  } catch (error: any) {
-    const errorMessage = error.isApiError
-      ? `タスク情報取得エラー: ${error.details}`
-      : `タスク情報取得中に予期しないエラーが発生しました: ${error.message}`;
-    
-    console.error('最近のタスク取得失敗:', error);
-    throw new Error(errorMessage);
-  }
+  return ensureApiInitialized(async () => {
+    try {
+      console.log(`最近のタスク取得中... projectId: ${projectId}, filePath: ${filePath || 'なし'}`);
+      const { data } = await apiClient.get<RecentTasks>(`/projects/${projectId}/recent-tasks`, {
+        params: { file_path: filePath }
+      });
+      console.log('最近のタスク取得成功');
+      return data;
+    } catch (error: any) {
+      const errorMessage = error.isApiError
+        ? `タスク情報取得エラー: ${error.details}`
+        : `タスク情報取得中に予期しないエラーが発生しました: ${error.message}`;
+      
+      console.error('最近のタスク取得失敗:', error);
+      throw new Error(errorMessage);
+    }
+  });
 };
 
 // ダッシュボードメトリクスの取得
 export const getMetrics = async (filePath?: string): Promise<DashboardMetrics> => {
-  try {
-    console.log(`メトリクス取得中... filePath: ${filePath || 'なし'}`);
-    const { data } = await apiClient.get<DashboardMetrics>('/metrics', {
-      params: { file_path: filePath }
-    });
-    console.log('メトリクス取得成功');
-    return data;
-  } catch (error: any) {
-    const errorMessage = error.isApiError
-      ? `メトリクス取得エラー: ${error.details}`
-      : `メトリクス取得中に予期しないエラーが発生しました: ${error.message}`;
-    
-    console.error('メトリクス取得失敗:', error);
-    throw new Error(errorMessage);
-  }
+  return ensureApiInitialized(async () => {
+    try {
+      console.log(`メトリクス取得中... filePath: ${filePath || 'なし'}`);
+      const { data } = await apiClient.get<DashboardMetrics>('/metrics', {
+        params: { file_path: filePath }
+      });
+      console.log('メトリクス取得成功');
+      return data;
+    } catch (error: any) {
+      const errorMessage = error.isApiError
+        ? `メトリクス取得エラー: ${error.details}`
+        : `メトリクス取得中に予期しないエラーが発生しました: ${error.message}`;
+      
+      console.error('メトリクス取得失敗:', error);
+      throw new Error(errorMessage);
+    }
+  });
 };
 
 // デフォルトファイルパスの取得
 export const getDefaultPath = async (): Promise<FileResponse> => {
-  try {
-    console.log('デフォルトファイルパス取得中...');
-    const { data } = await apiClient.get<FileResponse>('/files/default-path');
-    console.log(`デフォルトファイルパス取得成功: ${data.path || 'パスなし'}`);
-    return data;
-  } catch (error: any) {
-    console.error('デフォルトファイルパス取得失敗:', error);
-    
-    // エラーが発生してもFileResponse形式で返す
-    return {
-      success: false,
-      message: error.isApiError 
-        ? `デフォルトパス取得エラー: ${error.details}` 
-        : `デフォルトパス取得中に予期しないエラーが発生しました: ${error.message}`,
-      path: null
-    };
-  }
+  return ensureApiInitialized(async () => {
+    try {
+      console.log('デフォルトファイルパス取得中...');
+      const { data } = await apiClient.get<FileResponse>('/files/default-path');
+      console.log(`デフォルトファイルパス取得成功: ${data.path || 'パスなし'}`);
+      return data;
+    } catch (error: any) {
+      console.error('デフォルトファイルパス取得失敗:', error);
+      
+      // エラーが発生してもFileResponse形式で返す
+      return {
+        success: false,
+        message: error.isApiError 
+          ? `デフォルトパス取得エラー: ${error.details}` 
+          : `デフォルトパス取得中に予期しないエラーが発生しました: ${error.message}`,
+        path: null
+      };
+    }
+  });
 };
 
 // ファイルを開く
 export const openFile = async (path: string): Promise<FileResponse> => {
-  try {
-    console.log(`ファイルを開く... path: ${path}`);
-    const { data } = await apiClient.post<FileResponse>('/files/open', { path });
-    console.log(`ファイルを開く成功: ${data.success ? '成功' : '失敗'}`);
-    return data;
-  } catch (error: any) {
-    console.error('ファイルを開く失敗:', error);
-    
-    // エラーが発生してもFileResponse形式で返す
-    return {
-      success: false,
-      message: error.isApiError
-        ? `ファイルを開くエラー: ${error.details}`
-        : `ファイルを開く際に予期しないエラーが発生しました: ${error.message}`,
-      path: null
-    };
-  }
+  return ensureApiInitialized(async () => {
+    try {
+      console.log(`ファイルを開く... path: ${path}`);
+      const { data } = await apiClient.post<FileResponse>('/files/open', { path });
+      console.log(`ファイルを開く成功: ${data.success ? '成功' : '失敗'}`);
+      return data;
+    } catch (error: any) {
+      console.error('ファイルを開く失敗:', error);
+      
+      // エラーが発生してもFileResponse形式で返す
+      return {
+        success: false,
+        message: error.isApiError
+          ? `ファイルを開くエラー: ${error.details}`
+          : `ファイルを開く際に予期しないエラーが発生しました: ${error.message}`,
+        path: null
+      };
+    }
+  });
 };
 
 // ブラウザのファイル入力要素を使った選択
@@ -701,15 +791,23 @@ const selectFileUsingBrowser = (): Promise<FileResponse> => {
       }
     };
 
-    // キャンセル処理
-    input.oncancel = () => {
-      document.body.removeChild(input);
-      resolve({
-        success: false,
-        message: 'ファイル選択がキャンセルされました',
-        path: null
-      });
+    // 古いブラウザで使うキャンセル処理
+    const handleWindowClick = () => {
+      // ある程度の遅延後にまだ要素が存在するかチェック
+      setTimeout(() => {
+        if (document.body.contains(input)) {
+          document.body.removeChild(input);
+          window.removeEventListener('click', handleWindowClick);
+          resolve({
+            success: false,
+            message: 'ファイル選択がキャンセルされました',
+            path: null
+          });
+        }
+      }, 500);
     };
+    
+    window.addEventListener('click', handleWindowClick, { once: true });
 
     // クリックイベントをトリガー
     input.click();
@@ -718,20 +816,21 @@ const selectFileUsingBrowser = (): Promise<FileResponse> => {
 
 // ファイル選択ダイアログを表示する
 export const selectFile = async (initialPath?: string): Promise<FileResponse> => {
+  if (!isClient) {
+    return {
+      success: false,
+      message: 'クライアント側でのみ使用可能な機能です',
+      path: null
+    };
+  }
+  
   try {
+    // 実際のAPI URLを非同期で取得
+    const apiUrl = await getCurrentApiUrl();
     console.log('[API] ファイル選択ダイアログ表示リクエスト開始', { 
       initialPath: initialPath || 'なし',
-      apiUrl: getCurrentApiUrl()
+      apiUrl: apiUrl
     });
-    
-    // サーバーサイドでは早期リターン
-    if (!isClient) {
-      return {
-        success: false,
-        message: 'クライアント側でのみ使用可能な機能です',
-        path: null
-      };
-    }
     
     // 開発環境かどうかをチェック
     if (process.env.NODE_ENV === 'development') {
@@ -740,19 +839,21 @@ export const selectFile = async (initialPath?: string): Promise<FileResponse> =>
     }
     
     // Electron環境かどうかをチェック
-    if (window.electron && window.electron.dialog) {
+    if (isElectronEnvironment() && window.electron?.dialog) {
       console.log('[API] Electron環境を検出、Electronダイアログを使用します');
       return await window.electron.dialog.openCSVFile(initialPath || '');
     }
     
     // それ以外の場合はAPIを使用
-    console.log('[API] APIベースのファイル選択を使用します');
-    const { data } = await apiClient.get<FileResponse>('/files/select', {
-      params: { initial_path: initialPath },
-      timeout: 30000 // ファイル選択には時間がかかる可能性があるため、長めのタイムアウト
+    return ensureApiInitialized(async () => {
+      console.log('[API] APIベースのファイル選択を使用します');
+      const { data } = await apiClient.get<FileResponse>('/files/select', {
+        params: { initial_path: initialPath },
+        timeout: 30000 // ファイル選択には時間がかかる可能性があるため、長めのタイムアウト
+      });
+      
+      return data;
     });
-    
-    return data;
   } catch (error: any) {
     console.error('[API] ファイル選択リクエストエラー:', error);
     
@@ -783,48 +884,52 @@ export const uploadCSVFile = async (file: File): Promise<FileResponse> => {
     };
   }
   
-  try {
-    console.log('[API] CSVファイルアップロード開始');
-    
-    // FormDataを作成
-    const formData = new FormData();
-    formData.append('file', file);
-    
-    // APIにアップロード
-    const { data } = await apiClient.post<FileResponse>('/files/upload', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      },
-      timeout: 30000 // ファイルアップロードには時間がかかる可能性があるため、長めのタイムアウト
-    });
-    
-    console.log('[API] ファイルアップロード成功:', data);
-    return data;
-  } catch (error: any) {
-    console.error('[API] ファイルアップロードエラー:', error);
-    return {
-      success: false,
-      message: error.isApiError
-        ? `ファイルアップロードエラー: ${error.details}`
-        : `ファイルアップロード中に予期しないエラーが発生しました: ${error.message}`,
-      path: null
-    };
-  }
+  return ensureApiInitialized(async () => {
+    try {
+      console.log('[API] CSVファイルアップロード開始');
+      
+      // FormDataを作成
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      // APIにアップロード
+      const { data } = await apiClient.post<FileResponse>('/files/upload', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        },
+        timeout: 30000 // ファイルアップロードには時間がかかる可能性があるため、長めのタイムアウト
+      });
+      
+      console.log('[API] ファイルアップロード成功:', data);
+      return data;
+    } catch (error: any) {
+      console.error('[API] ファイルアップロードエラー:', error);
+      return {
+        success: false,
+        message: error.isApiError
+          ? `ファイルアップロードエラー: ${error.details}`
+          : `ファイルアップロード中に予期しないエラーが発生しました: ${error.message}`,
+        path: null
+      };
+    }
+  });
 };
 
 // バックエンドのシャットダウンをリクエスト
 export const requestShutdown = async (): Promise<ShutdownResponse> => {
-  try {
-    console.log('APIシャットダウンリクエスト実行中...');
-    const { data } = await apiClient.post<ShutdownResponse>('/shutdown');
-    console.log('APIシャットダウンリクエスト成功:', data);
-    return data;
-  } catch (error: any) {
-    console.error('APIシャットダウンリクエスト失敗:', error);
-    throw new Error(error.isApiError
-      ? `シャットダウンリクエストエラー: ${error.details}`
-      : `シャットダウンリクエスト中に予期しないエラーが発生しました: ${error.message}`);
-  }
+  return ensureApiInitialized(async () => {
+    try {
+      console.log('APIシャットダウンリクエスト実行中...');
+      const { data } = await apiClient.post<ShutdownResponse>('/shutdown');
+      console.log('APIシャットダウンリクエスト成功:', data);
+      return data;
+    } catch (error: any) {
+      console.error('APIシャットダウンリクエスト失敗:', error);
+      throw new Error(error.isApiError
+        ? `シャットダウンリクエストエラー: ${error.details}`
+        : `シャットダウンリクエスト中に予期しないエラーが発生しました: ${error.message}`);
+    }
+  });
 };
 
 // 後方互換性のためのエイリアス
