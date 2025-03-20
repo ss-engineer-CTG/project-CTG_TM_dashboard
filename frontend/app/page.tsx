@@ -312,6 +312,11 @@ export default function Home() {
               <div>
                 <p><span className="text-gray-300">環境: </span>{process.env.NODE_ENV}</p>
                 <p><span className="text-gray-300">ファイルパス: </span>{selectedFilePath || 'なし'}</p>
+                <p><span className="text-gray-300">Electron環境: </span>
+                   {typeof window !== 'undefined' && window.electron ? 'はい' : 'いいえ'}</p>
+                <p><span className="text-gray-300">Electron API: </span>
+                   {typeof window !== 'undefined' && window.electron ? 
+                     Object.keys(window.electron).join(', ') : 'なし'}</p>
               </div>
               <div>
                 <p><span className="text-gray-300">API状態: </span>{apiStatus.message}</p>

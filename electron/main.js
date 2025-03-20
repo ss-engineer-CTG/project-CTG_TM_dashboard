@@ -928,7 +928,9 @@ ipcMain.handle('dialog:openCSVFile', async (event, defaultPath) => {
     }
     
     // ダイアログ表示
+    console.log('ダイアログオプション:', dialogOptions);
     const result = await dialog.showOpenDialog(mainWindow, dialogOptions);
+    console.log('ダイアログ結果:', result);
     
     if (result.canceled) {
       return { 
@@ -960,5 +962,23 @@ ipcMain.handle('dialog:openCSVFile', async (event, defaultPath) => {
       message: `エラーが発生しました: ${error.message}`, 
       path: null 
     };
+  }
+});
+
+// テスト用のダイアログハンドラー（追加する）
+ipcMain.handle('dialog:test', async () => {
+  console.log('Test dialog requested');
+  try {
+    const result = await dialog.showMessageBox({
+      type: 'info',
+      title: 'ダイアログテスト',
+      message: 'これはElectronダイアログのテストです',
+      buttons: ['OK']
+    });
+    console.log('Test dialog result:', result);
+    return { success: true, result };
+  } catch (error) {
+    console.error('Test dialog error:', error);
+    return { success: false, error: error.message };
   }
 });

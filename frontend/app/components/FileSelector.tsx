@@ -88,6 +88,32 @@ const FileSelector: React.FC<FileSelectorProps> = ({ onSelectFile, selectedFileP
     }
   };
 
+  // Electronダイアログのテスト用関数
+  const testElectronDialog = async () => {
+    console.log('%c[テスト] Electronダイアログテスト開始', 'color:blue; font-size:14px; font-weight:bold;');
+    if (isElectronEnvironment() && window.electron?.testDialog) {
+      try {
+        const result = await window.electron.testDialog();
+        console.log('[テスト] ダイアログテスト結果:', result);
+        addNotification('ダイアログテスト: ' + (result.success ? '成功' : '失敗'), result.success ? 'success' : 'error');
+      } catch (error) {
+        console.error('[テスト] ダイアログテストエラー:', error);
+        addNotification('ダイアログテストエラー', 'error');
+      }
+    } else {
+      console.log('[テスト] Electron環境またはtestDialog関数が利用できません');
+      addNotification('Electron環境が検出されませんでした', 'error');
+    }
+  };
+  
+  // Electron環境検出
+  const isElectronEnvironment = (): boolean => {
+    return typeof window !== 'undefined' && 
+           window.electron && 
+           typeof window.electron === 'object' &&
+           !!Object.keys(window.electron).length;
+  };
+
   return (
     <div className="flex items-center flex-wrap">
       {/* 現在選択されているファイルの表示 */}
@@ -106,6 +132,16 @@ const FileSelector: React.FC<FileSelectorProps> = ({ onSelectFile, selectedFileP
         >
           {isSelectingFile ? '選択中...' : '参照'}
         </button>
+        
+        {/* Electron診断ボタン - 診断モードでのみ表示 */}
+        {process.env.NODE_ENV !== 'production' && (
+          <button
+            onClick={testElectronDialog}
+            className="bg-transparent text-purple-400 px-2.5 py-1.5 rounded border border-purple-400 text-xs hover:bg-purple-400 hover:text-surface transition-colors"
+          >
+            診断
+          </button>
+        )}
         
         {/* 開発環境用ファイルアップロードボタン */}
         {process.env.NODE_ENV === 'development' && (
