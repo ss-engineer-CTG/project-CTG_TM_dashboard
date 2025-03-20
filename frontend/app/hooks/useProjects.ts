@@ -6,9 +6,8 @@ import { getProjects, getMetrics, openFile } from '../lib/services';
 import { testApiConnection } from '../lib/connection';
 import { useNotification } from '../contexts/NotificationContext';
 import { useApi } from '../contexts/ApiContext';
-
-// クライアントサイドのみの処理を判定するヘルパー関数
-const isClient = typeof window !== 'undefined';
+import { isClient, isElectronEnvironment } from '../lib/utils/environment';
+import { setupIpcListeners } from '../lib/electron-utils';
 
 /**
  * プロジェクト情報を管理するカスタムフック
@@ -25,6 +24,53 @@ export const useProjects = (filePath: string | null) => {
   
   // APIコンテキストを使用
   const { status: apiStatus, reconnectAttempts, checkConnection: checkApiConnection } = useApi();
+
+  // Electron IPCリスナーのセットアップ
+  useEffect(() => {
+    if (!isClient || !isElectronEnvironment()) return;
+    
+    // Electron IPCリスナーを設定
+    const cleanupListeners = setupIpcListeners({
+      onConnectionEstablished: (data) => {
+        console.log('API接続確立:', data);
+        addNotification(`APIサーバーへの接続が確立されました (ポート: ${data.port})`, 'success');
+        
+        // 接続が確立されたら自動的にデータを更新
+        if (filePath) {
+          fetchData();
+        }
+      },
+      
+      onServerDown: (data) => {
+        console.error('APIサーバーダウン:', data);
+        addNotification(data.message || 'バックエンドサーバーが応答していません', 'error');
+        
+        // エラー表示を更新
+        setError({
+          message: 'バックエンドサーバーが応答していません',
+          details: {
+            message: data.message,
+            time: new Date().toISOString()
+          }
+        });
+      },
+      
+      onServerRestarted: (data) => {
+        console.log('APIサーバー再起動:', data);
+        addNotification(`バックエンドサーバーが再起動しました (ポート: ${data.port})`, 'info');
+        
+        // サーバーが再起動したら自動的にデータを更新
+        if (filePath) {
+          setTimeout(() => fetchData(), 1000); // 少し待ってからデータ取得
+        }
+      }
+    });
+    
+    // クリーンアップ
+    return () => {
+      if (cleanupListeners) cleanupListeners();
+    };
+  }, [addNotification, filePath]);
 
   // データ取得関数
   const fetchData = useCallback(async () => {

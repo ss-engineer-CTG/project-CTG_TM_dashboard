@@ -10,6 +10,12 @@ const validChannels = [
   'api-server-restarted'
 ];
 
+// Electron APIの初期化完了イベントの発行
+document.addEventListener('DOMContentLoaded', () => {
+  console.log('DOM content loaded, triggering electron-ready event');
+  document.dispatchEvent(new Event('electron-ready'));
+});
+
 // メインプロセスとレンダラープロセス間の安全な通信を提供
 contextBridge.exposeInMainWorld('electron', {
   // アプリケーションパスを取得

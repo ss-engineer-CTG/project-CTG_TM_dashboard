@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useCallback, useEffect } fr
 import { APIConnectionStatus } from '../lib/types';
 import { testApiConnection } from '../lib/connection';
 import { useNotification } from './NotificationContext';
+import { isClient } from '../lib/utils/environment';
 
 interface ApiContextType {
   status: APIConnectionStatus;
@@ -26,7 +27,7 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // API接続確認
   const checkConnection = useCallback(async (retryDelay: number = 0) => {
     // クライアントサイドでのみ実行
-    if (typeof window === 'undefined') return false;
+    if (!isClient) return false;
     
     setStatus(prev => ({ ...prev, loading: true }));
     
@@ -74,17 +75,35 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 初期接続確認
   useEffect(() => {
+    // コンポーネントのマウント状態を追跡するフラグ
+    let isMounted = true;
+    
     // クライアントサイドでのみ実行
-    if (typeof window === 'undefined') return;
+    if (!isClient) return;
     
-    checkConnection();
+    const initializeConnection = async () => {
+      await checkConnection();
+      
+      // コンポーネントがアンマウントされていなければ定期的な確認を設定
+      if (isMounted) {
+        // 定期的に接続を確認
+        const intervalId = setInterval(() => {
+          checkConnection();
+        }, 5 * 60 * 1000); // 5分ごと
+        
+        return () => {
+          clearInterval(intervalId);
+          isMounted = false;
+        };
+      }
+    };
     
-    // 定期的に接続を確認
-    const intervalId = setInterval(() => {
-      checkConnection();
-    }, 5 * 60 * 1000); // 5分ごと
+    initializeConnection();
     
-    return () => clearInterval(intervalId);
+    // クリーンアップ関数
+    return () => {
+      isMounted = false;
+    };
   }, [checkConnection]);
 
   return (

@@ -1,28 +1,7 @@
 import { apiClient } from './client';
 import { initializeApi } from './connection';
 import { Project, DashboardMetrics, FileResponse, RecentTasks, HealthResponse, ShutdownResponse } from './types';
-
-// クライアントサイドのみの処理を判定するヘルパー関数
-const isClient = typeof window !== 'undefined';
-
-// Electron環境検出のヘルパー
-const isElectronEnvironment = (): boolean => {
-  const result = isClient && 
-         window.electron && 
-         typeof window.electron === 'object' &&
-         !!Object.keys(window.electron).length;
-  
-  console.log('[API] Electron環境検出結果:', {
-    isClient,
-    hasElectronObject: isClient && !!window.electron,
-    isObject: isClient && window.electron && typeof window.electron === 'object',
-    hasProperties: isClient && window.electron && typeof window.electron === 'object' && !!Object.keys(window.electron).length,
-    electronProperties: isClient && window.electron ? Object.keys(window.electron) : [],
-    result
-  });
-  
-  return result;
-};
+import { isClient, isElectronEnvironment, getApiInitialized } from './utils/environment';
 
 // APIが初期化されていることを確認する高階関数
 const withApiInitialized = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -30,7 +9,12 @@ const withApiInitialized = async <T>(fn: () => Promise<T>): Promise<T> => {
     throw new Error('This function can only be called in client-side code');
   }
   
-  await initializeApi();
+  // API初期化状態を確認
+  if (!getApiInitialized()) {
+    await initializeApi();
+  }
+  
+  // API呼び出しを実行
   return fn();
 };
 
@@ -220,7 +204,7 @@ export const selectFile = async (initialPath?: string): Promise<FileResponse> =>
   
   try {
     // 実際のAPI URLを非同期で取得
-    const apiUrl = await getCurrentApiUrl();
+    const apiUrl = apiClient.getBaseUrl();
     console.log('[API] ファイル選択ダイアログ表示リクエスト開始', { 
       initialPath: initialPath || 'なし',
       apiUrl: apiUrl
@@ -239,11 +223,10 @@ export const selectFile = async (initialPath?: string): Promise<FileResponse> =>
     }
     
     // それ以外の場合はAPIを使用
-    return ensureApiInitialized(async () => {
+    return withApiInitialized(async () => {
       console.log('[API] APIベースのファイル選択を使用します');
-      const { data } = await apiClient.get<FileResponse>('/files/select', {
-        params: { initial_path: initialPath },
-        timeout: 30000 // ファイル選択には時間がかかる可能性があるため、長めのタイムアウト
+      const data = await apiClient.get<FileResponse>('/files/select', { 
+        initial_path: initialPath 
       });
       
       return data;
@@ -336,111 +319,6 @@ export const requestShutdown = async (): Promise<ShutdownResponse> => {
       throw error;
     }
   });
-};
-
-// 現在のAPIベースURLを取得する（api.tsから抽出）
-export const getCurrentApiUrl = async (): Promise<string> => {
-  try {
-    // APIベースURLをログに出力
-    const url = await getApiBaseUrl();
-    console.log(`現在のAPIベースURL: ${url}`);
-    return url;
-  } catch (error) {
-    console.error('API URL取得エラー:', error);
-    return '/api'; // エラー時のフォールバック
-  }
-};
-
-// API初期化を確保する（api.tsから抽出）
-const ensureApiInitialized = async <T>(
-  apiCall: () => Promise<T>
-): Promise<T> => {
-  if (!isClient) {
-    throw new Error('This function can only be called in client-side code');
-  }
-  
-  // API初期化が完了していない場合は待機
-  if (!window.apiInitialized) {
-    await initializeApi();
-  }
-  
-  // API呼び出しを実行
-  return apiCall();
-};
-
-// APIベースURLの取得（api.tsから抽出）
-const getApiBaseUrl = async (): Promise<string> => {
-  // サーバーサイドでは相対パスを返す
-  if (!isClient) {
-    return '/api';
-  }
-  
-  // Electron環境でグローバル変数からAPIベースURLを取得
-  if (isElectronEnvironment() && typeof window.electron?.getApiBaseUrl === 'function') {
-    try {
-      const url = await window.electron.getApiBaseUrl();
-      return url;
-    } catch (e) {
-      console.warn('APIベースURL取得エラー:', e);
-    }
-  }
-  
-  // 開発環境では複数ポートを試す
-  if (process.env.NODE_ENV === 'development') {
-    console.log('開発環境を検出: 直接バックエンドURLを使用します');
-    // 現在のポートを使用（グローバル変数から取得）
-    if (isClient && window.currentApiPort) {
-      return `http://127.0.0.1:${window.currentApiPort}/api`;
-    }
-    return 'http://127.0.0.1:8000/api';
-  }
-  
-  // デバッグメッセージ
-  console.log(`実行環境: ブラウザ`);
-  console.log(`環境変数: ${process.env.NEXT_PUBLIC_API_URL || '未設定'}`);
-  console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
-  
-  // クライアントサイドでの判定
-  // Electron環境の検出
-  if (isElectronEnvironment() && window.electron?.env?.isElectron) {
-    const url = window.electron.env.apiUrl || 'http://127.0.0.1:8000/api';
-    console.log(`Electron環境が検出されました、APIエンドポイント: ${url}`);
-    return url;
-  }
-  
-  // Window objectが存在する環境でのローカルストレージチェック
-  if (isClient) {
-    try {
-      const savedApiUrl = localStorage.getItem('api_base_url');
-      if (savedApiUrl) {
-        console.log(`ローカルストレージからAPIエンドポイントを取得: ${savedApiUrl}`);
-        return savedApiUrl;
-      }
-      
-      // 保存されたポート番号の使用
-      const savedPort = localStorage.getItem('api_port');
-      if (savedPort) {
-        const port = parseInt(savedPort, 10);
-        if (!isNaN(port)) {
-          const url = `http://127.0.0.1:${port}/api`;
-          console.log(`保存されたポート番号を使用: ${url}`);
-          return url;
-        }
-      }
-    } catch (e) {
-      console.warn('ローカルストレージアクセスエラー:', e);
-    }
-  }
-  
-  // 環境変数による設定
-  if (process.env.NEXT_PUBLIC_API_URL) {
-    console.log(`環境変数からAPIエンドポイントを取得: ${process.env.NEXT_PUBLIC_API_URL}`);
-    return process.env.NEXT_PUBLIC_API_URL;
-  }
-  
-  // 開発環境ではNext.jsのrewrites機能を使うため相対パスを使用
-  console.log('デフォルトのAPIエンドポイントを使用: /api');
-  return '/api';
 };
 
 // index.ts ファイルでエクスポートを集約

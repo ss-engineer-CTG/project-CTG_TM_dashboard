@@ -1,47 +1,64 @@
-// app/lib/electron-utils.ts
+// Electron IPC通信の共通リスナー設定ユーティリティ
+import { isClient, isElectronEnvironment } from './utils/environment';
 
 /**
- * Electron IPC通信の共通リスナー設定ユーティリティ
- * 
- * page.tsxとuseProjects.tsの両方で使用される重複したコードを一元管理する
+ * IPC コールバック関数の型定義
  */
 export interface IpcCallbacks {
-    onConnectionEstablished: (data: { port: number, apiUrl: string }) => void;
-    onServerDown: (data: { message: string }) => void;
-    onServerRestarted: (data: { port: number, apiUrl: string }) => void;
-  }
+  /**
+   * API接続が確立されたときのコールバック
+   */
+  onConnectionEstablished: (data: { port: number, apiUrl: string }) => void;
   
   /**
-   * Electron IPCイベントリスナーをセットアップする
-   * @param callbacks イベント発生時のコールバック関数群
-   * @returns クリーンアップ関数（登録したリスナーを削除するために使用）
+   * APIサーバーが応答しなくなったときのコールバック
    */
-  export const setupIpcListeners = (callbacks: IpcCallbacks) => {
-    // クライアントサイドのみの処理を判定
-    if (typeof window === 'undefined' || !window.electron || !window.electron.ipcRenderer) {
-      return undefined;
-    }
+  onServerDown: (data: { message: string }) => void;
   
-    // 各イベントリスナーを登録
-    const removeConnectionListener = window.electron.ipcRenderer.on(
-      'api-connection-established',
-      callbacks.onConnectionEstablished
-    );
-    
-    const removeServerDownListener = window.electron.ipcRenderer.on(
-      'api-server-down',
-      callbacks.onServerDown
-    );
-    
-    const removeServerRestartListener = window.electron.ipcRenderer.on(
-      'api-server-restarted',
-      callbacks.onServerRestarted
-    );
-    
-    // すべてのリスナーを削除するクリーンアップ関数を返す
-    return () => {
-      if (removeConnectionListener) removeConnectionListener();
-      if (removeServerDownListener) removeServerDownListener();
-      if (removeServerRestartListener) removeServerRestartListener();
-    };
+  /**
+   * APIサーバーが再起動されたときのコールバック
+   */
+  onServerRestarted: (data: { port: number, apiUrl: string }) => void;
+}
+
+/**
+ * Electron IPCイベントリスナーをセットアップする
+ * 
+ * @param callbacks イベント発生時のコールバック関数群
+ * @returns クリーンアップ関数（登録したリスナーを削除するために使用）
+ */
+export const setupIpcListeners = (callbacks: IpcCallbacks): (() => void) | undefined => {
+  // クライアントサイドの環境チェック
+  if (!isClient || !isElectronEnvironment()) {
+    console.log('Electronディスパッチャの初期化をスキップ: 対象環境ではありません');
+    return undefined;
+  }
+  
+  console.log('Electronディスパッチャの初期化: リスナーを登録');
+  
+  // 接続確立イベントのリスナー登録
+  const removeConnectionListener = window.electron?.ipcRenderer.on(
+    'api-connection-established',
+    callbacks.onConnectionEstablished
+  );
+  
+  // サーバーダウンイベントのリスナー登録 
+  const removeServerDownListener = window.electron?.ipcRenderer.on(
+    'api-server-down',
+    callbacks.onServerDown
+  );
+  
+  // サーバー再起動イベントのリスナー登録
+  const removeServerRestartListener = window.electron?.ipcRenderer.on(
+    'api-server-restarted',
+    callbacks.onServerRestarted
+  );
+  
+  // リスナー削除のためのクリーンアップ関数を返す
+  return () => {
+    console.log('Electronディスパッチャのクリーンアップ: リスナーを解除');
+    if (removeConnectionListener) removeConnectionListener();
+    if (removeServerDownListener) removeServerDownListener();
+    if (removeServerRestartListener) removeServerRestartListener();
   };
+};

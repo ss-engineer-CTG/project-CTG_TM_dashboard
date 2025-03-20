@@ -10,20 +10,38 @@ import DurationChart from './components/DurationChart';
 import ConnectionError from './components/ConnectionError';
 import ErrorMessage from './components/ErrorMessage';
 import EnhancedAPIStatus from './components/EnhancedAPIStatus';
+import ClientInfo from './components/ClientInfo';
 import { getDefaultPath, testApiConnection } from './lib/services';
 import { useNotification } from './contexts/NotificationContext';
 import { useApi } from './contexts/ApiContext';
 import { APIConnectionStatus } from './lib/types';
+import { isClient } from './lib/utils/environment';
 
-// クライアントサイドのみの処理を判定するヘルパー関数
-const isClient = typeof window !== 'undefined';
+// Electron UI初期化用のカスタムフック
+const useElectronInitialization = () => {
+  const [isElectronReady, setIsElectronReady] = useState(false);
 
-// Electron環境検出のヘルパー
-const isElectronEnvironment = (): boolean => {
-  return isClient && 
-         window.electron && 
-         typeof window.electron === 'object' &&
-         !!Object.keys(window.electron).length;
+  useEffect(() => {
+    // 既にElectron APIが利用可能かチェック
+    if (isClient && window.electron) {
+      setIsElectronReady(true);
+      window.electronReady = true;
+    } else {
+      // Electron APIが利用可能になるのを待つイベントリスナー
+      const handleElectronReady = () => {
+        setIsElectronReady(true);
+        window.electronReady = true;
+      };
+      
+      document.addEventListener('electron-ready', handleElectronReady);
+      
+      return () => {
+        document.removeEventListener('electron-ready', handleElectronReady);
+      };
+    }
+  }, []);
+
+  return { isElectronReady };
 };
 
 const FirstTimeUserGuide: React.FC<{onClose: () => void}> = ({onClose}) => {
@@ -78,6 +96,9 @@ export default function Home() {
   const [showGuide, setShowGuide] = useState<boolean>(false);
   const { addNotification } = useNotification();
   
+  // Electron初期化状態を取得
+  const { isElectronReady } = useElectronInitialization();
+  
   // APIコンテキストから状態を取得
   const { status: apiStatus, reconnectAttempts, checkConnection: checkApiConnection } = useApi();
 
@@ -94,16 +115,25 @@ export default function Home() {
   // 初回レンダリング時にAPIの健全性をチェックしてデフォルトのファイルパスを取得
   // クライアントサイドでのみ実行
   useEffect(() => {
-    // サーバーサイドレンダリング時は何もしない
-    if (!isClient) return;
+    // コンポーネントのマウント状態を追跡するフラグ
+    let isMounted = true;
     
     const initializeApp = async () => {
       try {
+        // コンポーネントのアンマウント後は状態更新しない
+        if (!isMounted) return;
+        
         setConnectionAttempts(prev => prev + 1);
         
         // APIの健全性をチェック
         const ports = [8000, 8080, 8888, 8081, 8001, 3001, 5000];
         setTriedPorts(ports);
+        
+        // Electron環境の場合はElectron APIの準備完了を待機
+        if (isClient && !isElectronReady && window.electron) {
+          console.log('Electron API準備中、初期化を待機します...');
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
         
         // API接続をチェック
         const isConnected = await checkApiConnection();
@@ -138,31 +168,40 @@ export default function Home() {
       } catch (error: any) {
         console.error('アプリケーション初期化エラー:', error);
         
-        setInitError({
-          message: 'アプリケーションの初期化中にエラーが発生しました。APIサーバーに接続できません。',
-          details: error
-        });
-        
-        addNotification('APIサーバーに接続できません。', 'error');
+        if (isMounted) {
+          setInitError({
+            message: 'アプリケーションの初期化中にエラーが発生しました。APIサーバーに接続できません。',
+            details: error
+          });
+          
+          addNotification('APIサーバーに接続できません。', 'error');
+        }
       } finally {
-        setIsInitializing(false);
-        
-        // ローカルストレージで初回起動かどうかを確認
-        try {
-          const hasVisitedBefore = localStorage.getItem('hasVisitedBefore');
-          if (!hasVisitedBefore) {
-            setShowGuide(true);
-            localStorage.setItem('hasVisitedBefore', 'true');
+        if (isMounted) {
+          setIsInitializing(false);
+          
+          // ローカルストレージで初回起動かどうかを確認
+          try {
+            const hasVisitedBefore = localStorage.getItem('hasVisitedBefore');
+            if (!hasVisitedBefore) {
+              setShowGuide(true);
+              localStorage.setItem('hasVisitedBefore', 'true');
+            }
+          } catch (e) {
+            // ローカルストレージへのアクセスエラーを無視
+            console.warn('ローカルストレージへのアクセスエラー:', e);
           }
-        } catch (e) {
-          // ローカルストレージへのアクセスエラーを無視
-          console.warn('ローカルストレージへのアクセスエラー:', e);
         }
       }
     };
     
     initializeApp();
-  }, [addNotification, checkApiConnection]);
+    
+    // クリーンアップ関数
+    return () => {
+      isMounted = false;
+    };
+  }, [addNotification, checkApiConnection, isElectronReady]);
 
   // 接続再試行
   const handleRetryConnection = async () => {
@@ -260,7 +299,6 @@ export default function Home() {
             message={initError.message} 
             details={initError.details}
             onRetry={handleRetryConnection}
-            suggestion="アプリケーションを再起動するか、別のCSVファイルを選択してください。"
           />
         ) : null}
         
@@ -270,7 +308,6 @@ export default function Home() {
             message={error.message} 
             details={error.details} 
             onRetry={refreshData}
-            suggestion="データ形式が正しいか確認してください。日本語を含む場合はUTF-8で保存されているか確認してください。"
           />
         )}
         
@@ -304,39 +341,8 @@ export default function Home() {
           </div>
         )}
         
-        {/* デバッグ情報（開発モードのみ） */}
-        {process.env.NODE_ENV === 'development' && (
-          <div className="mt-8 p-4 bg-gray-800 rounded">
-            <h3 className="text-yellow-400 text-sm font-medium mb-2">デバッグ情報</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-gray-400">
-              <div>
-                <p><span className="text-gray-300">環境: </span>{process.env.NODE_ENV}</p>
-                <p><span className="text-gray-300">ファイルパス: </span>{selectedFilePath || 'なし'}</p>
-                <p><span className="text-gray-300">Electron環境: </span>
-                   {typeof window !== 'undefined' && window.electron ? 'はい' : 'いいえ'}</p>
-                <p><span className="text-gray-300">Electron API: </span>
-                   {typeof window !== 'undefined' && window.electron ? 
-                     Object.keys(window.electron).join(', ') : 'なし'}</p>
-              </div>
-              <div>
-                <p><span className="text-gray-300">API状態: </span>{apiStatus.message}</p>
-                <p><span className="text-gray-300">最終確認: </span>
-                   {apiStatus.lastChecked ? apiStatus.lastChecked.toLocaleTimeString() : 'なし'}
-                </p>
-                <p><span className="text-gray-300">接続試行回数: </span>{connectionAttempts}</p>
-                <p><span className="text-gray-300">再接続試行回数: </span>{reconnectAttempts}</p>
-                <p>
-                  <button 
-                    onClick={() => checkApiConnection()}
-                    className="text-blue-400 hover:text-blue-300 underline"
-                  >
-                    接続テスト
-                  </button>
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* クライアント環境情報 (開発モードのみ) */}
+        <ClientInfo />
         
         {/* 初回起動ガイド */}
         {showGuide && <FirstTimeUserGuide onClose={() => setShowGuide(false)} />}

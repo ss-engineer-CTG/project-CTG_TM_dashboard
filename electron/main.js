@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, session } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const isDev = require('electron-is-dev');
@@ -606,15 +606,50 @@ function startApiHealthMonitoring(port) {
   });
 }
 
+// CSP設定を構成
+function setupContentSecurityPolicy() {
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    // 開発環境では'unsafe-eval'を許可、本番環境ではより制限的なCSPを使用
+    const cspValue = isDev 
+      ? "default-src 'self'; " +
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+        "style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data:; " +
+        "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*; " +
+        "font-src 'self'; " +
+        "object-src 'none'; " +
+        "base-uri 'self';"
+      : "default-src 'self'; " +
+        "script-src 'self' 'unsafe-inline'; " +
+        "style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data:; " +
+        "connect-src 'self' http://127.0.0.1:*; " +
+        "font-src 'self'; " +
+        "object-src 'none'; " +
+        "base-uri 'self';";
+    
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [cspValue]
+      }
+    });
+  });
+}
+
 // メインウィンドウを作成する関数
 function createWindow() {
+  // CSP設定をセットアップ
+  setupContentSecurityPolicy();
+  
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js')
+      preload: path.join(__dirname, 'preload.js'),
+      webSecurity: true
     }
   });
 
@@ -624,6 +659,13 @@ function createWindow() {
     : `file://${path.join(__dirname, '../out/index.html')}`; // ビルド後はHTMLファイルを直接使用
 
   mainWindow.loadURL(url);
+  
+  // Electron APIが準備完了になったことをレンダラープロセスに通知
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow.webContents.executeJavaScript(
+      `document.dispatchEvent(new Event('electron-ready'));`
+    );
+  });
 
   // 開発ツールを開く（開発環境のみ）
   if (isDev) {
@@ -871,7 +913,41 @@ app.on('activate', () => {
   }
 });
 
-// 追加のIPCハンドラ
+// ファイル操作のIPC
+ipcMain.handle('fs:exists', async (_, path) => {
+  return fs.existsSync(path);
+});
+
+ipcMain.handle('fs:readFile', async (_, path, options) => {
+  return fs.readFileSync(path, options);
+});
+
+ipcMain.handle('fs:writeFile', async (_, filePath, data, options) => {
+  return fs.writeFileSync(filePath, data, options);
+});
+
+ipcMain.handle('fs:mkdir', async (_, dirPath, options) => {
+  return fs.mkdirSync(dirPath, { recursive: true, ...options });
+});
+
+ipcMain.handle('fs:readdir', async (_, dirPath, options) => {
+  return fs.readdirSync(dirPath, options);
+});
+
+// パス操作のIPC
+ipcMain.handle('path:join', async (_, ...args) => {
+  return path.join(...args);
+});
+
+ipcMain.handle('path:dirname', async (_, filePath) => {
+  return path.dirname(filePath);
+});
+
+ipcMain.handle('path:basename', async (_, filePath) => {
+  return path.basename(filePath);
+});
+
+// アプリケーション関連のIPC
 ipcMain.handle('get-app-path', () => {
   return app.getPath('userData');
 });
@@ -965,7 +1041,7 @@ ipcMain.handle('dialog:openCSVFile', async (event, defaultPath) => {
   }
 });
 
-// テスト用のダイアログハンドラー（追加する）
+// テスト用のダイアログハンドラー
 ipcMain.handle('dialog:test', async () => {
   console.log('Test dialog requested');
   try {

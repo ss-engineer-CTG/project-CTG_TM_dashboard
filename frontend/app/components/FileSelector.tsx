@@ -3,6 +3,7 @@
 import React, { useState, useRef } from 'react';
 import { selectFile, uploadCSVFile } from '@/app/lib/services';
 import { useNotification } from '@/app/contexts/NotificationContext';
+import { isElectronEnvironment } from '@/app/lib/utils/environment';
 
 interface FileSelectorProps {
   onSelectFile: (path: string) => void;
@@ -14,36 +15,26 @@ const FileSelector: React.FC<FileSelectorProps> = ({ onSelectFile, selectedFileP
   const [isSelectingFile, setIsSelectingFile] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 参照ボタン処理
+  // ファイル参照ボタン処理
   const handleSelectFile = async () => {
-    // 非常に目立つログを追加
-    console.log('%c[重要] 参照ボタンがクリックされました!', 'color:red; font-size:16px; font-weight:bold;');
     setIsSelectingFile(true);
     
     try {
-      // デスクトップアプリケーション環境でファイル選択ダイアログを表示
-      console.log('[デバッグ] 次のパスで selectFile を呼び出します:', selectedFilePath);
-      console.log('[デバッグ] APIを使用してファイル選択を開始します');
-      
       const response = await selectFile(selectedFilePath || undefined);
-      console.log('[FileSelector] selectFile 呼び出し結果:', response);
       
       if (response.success && response.path) {
-        console.log('[FileSelector] ファイル選択成功:', response.path);
         onSelectFile(response.path);
         addNotification(`ファイルを選択しました: ${response.path}`, 'success');
       } else {
         // ファイル選択がキャンセルされた場合やエラーが発生した場合
-        console.log('[FileSelector] ファイル選択結果 - 失敗または選択なし:', response.message);
         if (response.message) {
           addNotification(response.message, 'error');
         }
       }
     } catch (error: any) {
-      console.error('[FileSelector] ファイル選択エラー:', error);
+      console.error('ファイル選択エラー:', error);
       addNotification('ファイルの選択中にエラーが発生しました', 'error');
     } finally {
-      console.log('[FileSelector] ファイル選択処理完了');
       setIsSelectingFile(false);
     }
   };
@@ -57,20 +48,17 @@ const FileSelector: React.FC<FileSelectorProps> = ({ onSelectFile, selectedFileP
     
     try {
       const file = files[0];
-      console.log('[FileSelector] ファイルアップロード開始:', file.name);
       // 開発環境の場合はファイルをアップロード
       const response = await uploadCSVFile(file);
       
       if (response.success && response.path) {
-        console.log('[FileSelector] ファイルアップロード成功:', response.path);
         onSelectFile(response.path);
         addNotification(`ファイルをアップロードしました: ${file.name}`, 'success');
       } else {
-        console.log('[FileSelector] ファイルアップロード失敗:', response.message);
         addNotification(response.message || 'ファイルのアップロードに失敗しました', 'error');
       }
     } catch (error: any) {
-      console.error('[FileSelector] ファイルアップロードエラー:', error);
+      console.error('ファイルアップロードエラー:', error);
       addNotification('ファイルのアップロード中にエラーが発生しました', 'error');
     } finally {
       // 次回同じファイルを選択できるようにリセット
@@ -90,28 +78,17 @@ const FileSelector: React.FC<FileSelectorProps> = ({ onSelectFile, selectedFileP
 
   // Electronダイアログのテスト用関数
   const testElectronDialog = async () => {
-    console.log('%c[テスト] Electronダイアログテスト開始', 'color:blue; font-size:14px; font-weight:bold;');
     if (isElectronEnvironment() && window.electron?.testDialog) {
       try {
         const result = await window.electron.testDialog();
-        console.log('[テスト] ダイアログテスト結果:', result);
         addNotification('ダイアログテスト: ' + (result.success ? '成功' : '失敗'), result.success ? 'success' : 'error');
       } catch (error) {
-        console.error('[テスト] ダイアログテストエラー:', error);
+        console.error('ダイアログテストエラー:', error);
         addNotification('ダイアログテストエラー', 'error');
       }
     } else {
-      console.log('[テスト] Electron環境またはtestDialog関数が利用できません');
       addNotification('Electron環境が検出されませんでした', 'error');
     }
-  };
-  
-  // Electron環境検出
-  const isElectronEnvironment = (): boolean => {
-    return typeof window !== 'undefined' && 
-           window.electron && 
-           typeof window.electron === 'object' &&
-           !!Object.keys(window.electron).length;
   };
 
   return (

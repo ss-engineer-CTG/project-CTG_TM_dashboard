@@ -1,5 +1,6 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { APIError } from './types';
+import { isClient, isElectronEnvironment } from './utils/environment';
 
 class ApiClient {
   private client: AxiosInstance;
@@ -26,7 +27,7 @@ class ApiClient {
     this.baseUrl = url;
     this.client.defaults.baseURL = url;
     
-    if (typeof window !== 'undefined') {
+    if (isClient) {
       try {
         localStorage.setItem('api_base_url', url);
       } catch (e) {

@@ -1,16 +1,13 @@
 import { apiClient } from './client';
 import { ConnectionTestResult, HealthResponse } from './types';
-
-// クライアントサイドのみの処理を判定するヘルパー関数
-const isClient = typeof window !== 'undefined';
-
-// Electron環境検出のヘルパー
-const isElectronEnvironment = (): boolean => {
-  return isClient && 
-         window.electron && 
-         typeof window.electron === 'object' &&
-         !!Object.keys(window.electron).length;
-};
+import { 
+  isClient, 
+  isElectronEnvironment, 
+  getApiInitialized, 
+  setApiInitialized,
+  getCurrentApiPort,
+  setCurrentApiPort
+} from './utils/environment';
 
 // ポート検出と接続テスト
 export const detectApiPort = async (): Promise<number | null> => {
@@ -75,8 +72,10 @@ export const detectApiPort = async (): Promise<number | null> => {
 
 // ポートが使用可能かどうかを確認
 const isPortAvailable = async (port: number): Promise<boolean> => {
+  if (!isClient) return false;
+  
+  // fetch APIを使った効率的なチェック
   try {
-    // fetch APIを使った効率的なチェック
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 2000);
     
@@ -122,9 +121,12 @@ export const testApiConnection = async (retryCount = 2): Promise<ConnectionTestR
   // 検出したポートで接続確認
   try {
     apiClient.setBaseUrl(`http://127.0.0.1:${port}/api`);
+    setCurrentApiPort(port);
     
     // 健全性チェック
     const data = await apiClient.get<HealthResponse>('/health');
+    
+    setApiInitialized(true);
     
     return {
       success: true,
@@ -157,10 +159,18 @@ export const initializeApi = async (): Promise<boolean> => {
   if (!apiInitializationPromise) {
     apiInitializationPromise = new Promise<boolean>(async (resolve) => {
       try {
+        if (getApiInitialized()) {
+          // 既に初期化済みの場合はそのまま成功を返す
+          resolve(true);
+          return;
+        }
+        
         const result = await testApiConnection();
+        setApiInitialized(result.success);
         resolve(result.success);
       } catch (e) {
         console.error('API初期化エラー:', e);
+        setApiInitialized(false);
         resolve(false);
       }
     });
