@@ -12,9 +12,25 @@ let documentReady = false;
  * Electron環境変数を安全に設定する関数
  */
 const setElectronReady = () => {
+  // グローバルフラグを設定
   window.electronReady = true;
   window.currentApiPort = null;
   window.apiInitialized = false;
+  
+  // DOM要素にElectron検出フラグを追加（CSS選択子で検出可能に）
+  try {
+    // 既存のメタタグをチェック
+    let meta = document.querySelector('meta[name="electron-ready"]');
+    if (!meta) {
+      // なければ作成
+      meta = document.createElement('meta');
+      meta.name = 'electron-ready';
+      meta.content = 'true';
+      document.head.appendChild(meta);
+    }
+  } catch (e) {
+    console.error('メタタグ設定エラー:', e);
+  }
   
   // 初期化完了イベントを発行
   try {
@@ -36,6 +52,12 @@ const setElectronReady = () => {
         } 
       })
     );
+    
+    // 明示的に情報をログ出力
+    console.log('Electron環境フラグをセットアップしました:', { 
+      electronReady: window.electronReady,
+      time: Date.now() - preloadStartTime
+    });
   } catch (e) {
     console.error('イベント発行エラー:', e);
   }
@@ -80,7 +102,6 @@ function initializeElectronBridge() {
       })
     );
     
-    // 新規追加: 初期化完了ステータスをコンソールに出力
     console.log('Electron bridge initialized successfully');
   } catch (e) {
     console.error('初期化イベント発行エラー:', e);
@@ -95,34 +116,7 @@ const validChannels = [
   'app-initializing'
 ];
 
-// 高速キャッシュ管理
-function optimizeCacheManagement() {
-  if (typeof localStorage !== 'undefined') {
-    try {
-      // 古いキャッシュをクリーンアップ - 非同期で実行
-      setTimeout(() => {
-        try {
-          const now = Date.now();
-          const maxAge = 7 * 24 * 60 * 60 * 1000; // 1週間
-          
-          for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key && key.includes('_timestamp')) {
-              const timestamp = parseInt(localStorage.getItem(key));
-              if (isNaN(timestamp) || (now - timestamp > maxAge)) {
-                const dataKey = key.replace('_timestamp', '');
-                localStorage.removeItem(key);
-                localStorage.removeItem(dataKey);
-              }
-            }
-          }
-        } catch (e) {}
-      }, 5000); // 5秒後に実行
-    } catch (e) {}
-  }
-}
-
-// メインプロセスとレンダラープロセス間の安全な通信を提供（高速化）
+// メインプロセスとレンダラープロセス間の安全な通信を提供
 contextBridge.exposeInMainWorld('electron', {
   // Electron識別フラグ - 明示的に追加
   isElectron: true,
@@ -136,7 +130,7 @@ contextBridge.exposeInMainWorld('electron', {
   // 一時ディレクトリのパスを取得
   getTempPath: () => ipcRenderer.invoke('get-temp-path'),
   
-  // ファイルシステム操作 - 高速化版
+  // ファイルシステム操作
   fs: {
     exists: (path) => ipcRenderer.invoke('fs:exists', path),
     readFile: (path, options) => ipcRenderer.invoke('fs:readFile', path, options),
@@ -145,14 +139,14 @@ contextBridge.exposeInMainWorld('electron', {
     readdir: (dirPath, options) => ipcRenderer.invoke('fs:readdir', dirPath, options)
   },
   
-  // パス操作 - 並列処理対応
+  // パス操作
   path: {
     join: (...args) => ipcRenderer.invoke('path:join', ...args),
     dirname: (filePath) => ipcRenderer.invoke('path:dirname', filePath),
     basename: (filePath) => ipcRenderer.invoke('path:basename', filePath)
   },
   
-  // ダイアログ操作 - エラーハンドリング強化
+  // ダイアログ操作
   dialog: {
     openCSVFile: (defaultPath) => {
       return ipcRenderer.invoke('dialog:openCSVFile', defaultPath)
@@ -181,12 +175,12 @@ contextBridge.exposeInMainWorld('electron', {
   
   // 環境変数
   env: {
-    isElectron: true,  // 追加：明示的なフラグ
+    isElectron: true,
     apiUrl: process.env.API_URL || null,
     startTime: preloadStartTime
   },
   
-  // IPCレンダラー - イベントリスナー（拡張版）
+  // IPCレンダラー
   ipcRenderer: {
     on: (channel, callback) => {
       if (validChannels.includes(channel)) {
@@ -202,10 +196,11 @@ contextBridge.exposeInMainWorld('electron', {
     }
   },
   
-  // 新規追加: 起動診断情報を提供
+  // 診断情報を提供
   diagnostics: {
     getStartupTime: () => preloadStartTime,
     isInitialized: () => ipcInitialized,
+    isElectronReady: () => window.electronReady === true,
     checkApiConnection: async () => {
       try {
         const baseUrl = await ipcRenderer.invoke('get-api-base-url');
@@ -226,18 +221,6 @@ contextBridge.exposeInMainWorld('electron', {
 
 // Electronが明示的に初期化されたことを示す変数を設定
 setElectronReady();
-
-// レンダリングプロセスのパフォーマンスを向上
-try {
-  // IDB高速ロード用空実行
-  const dbRequest = indexedDB.open('performance_cache', 1);
-  dbRequest.onupgradeneeded = () => {};
-  dbRequest.onsuccess = () => {};
-  dbRequest.onerror = () => {};
-} catch (e) {}
-
-// キャッシュ最適化を実行 - 遅延実行
-setTimeout(optimizeCacheManagement, 2000);
 
 // 準備完了ログ
 console.log(`Preload script completed in ${Date.now() - preloadStartTime}ms`);

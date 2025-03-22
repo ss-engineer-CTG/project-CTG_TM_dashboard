@@ -10,6 +10,25 @@
 type QueryParams = Record<string, any>;
 type RequestOptions = RequestInit & { timeout?: number };
 
+// ログレベル定義
+const LogLevel = {
+  ERROR: 0,
+  WARNING: 1,
+  INFO: 2,
+  DEBUG: 3
+};
+
+// 現在のログレベル（環境に応じて設定）
+const currentLogLevel = process.env.NODE_ENV === 'development' ? LogLevel.DEBUG : LogLevel.WARNING;
+
+// ロガー関数
+const logger = {
+  error: (message: string) => console.error(`[API Client] ${message}`),
+  warn: (message: string) => currentLogLevel >= LogLevel.WARNING && console.warn(`[API Client] ${message}`),
+  info: (message: string) => currentLogLevel >= LogLevel.INFO && console.info(`[API Client] ${message}`),
+  debug: (message: string) => currentLogLevel >= LogLevel.DEBUG && console.debug(`[API Client] ${message}`)
+};
+
 // カスタムAPIエラー型を定義
 class ApiError extends Error {
   status: number;
@@ -52,6 +71,7 @@ class ApiClient {
   // ベースURLを設定
   setBaseUrl(url: string): void {
     this.baseUrl = url;
+    logger.info(`API Base URL設定: ${url}`);
   }
 
   // タイムアウトを設定
@@ -62,6 +82,7 @@ class ApiClient {
   // キャッシュのクリア
   clearCache(): void {
     this.requestCache.clear();
+    logger.debug('APIキャッシュをクリア');
   }
 
   // URLを構築
@@ -119,7 +140,7 @@ class ApiClient {
       // 再試行時の待機時間を指数バックオフで計算
       if (retryCount > 0) {
         const delay = this.retryConfig.retryDelay * Math.pow(2, retryCount - 1);
-        console.log(`リクエストを再試行中... 試行 ${retryCount}/${this.retryConfig.maxRetries} (待機: ${delay}ms)`);
+        logger.debug(`リクエスト再試行: ${retryCount}/${this.retryConfig.maxRetries} (待機: ${delay}ms)`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
       
@@ -130,6 +151,7 @@ class ApiClient {
         requestOptions.signal = controller.signal;
         
         // リクエストを実行
+        logger.debug(`API ${method} リクエスト: ${url.split('?')[0]}`);
         const response = await fetch(url, requestOptions);
         
         // タイムアウトをクリア
@@ -150,6 +172,7 @@ class ApiClient {
             );
           }
           
+          logger.debug(`API レスポンス成功: ${url.split('?')[0]}`);
           return responseData;
         } else {
           // JSONでないレスポンスボディの読み込み
@@ -188,30 +211,43 @@ class ApiClient {
         
         // AbortControllerによるタイムアウトエラーを検出
         if (error.name === 'AbortError') {
-          throw new ApiError(
+          const timeoutError = new ApiError(
             'リクエストがタイムアウトしました',
             408,
             `Timeout after ${timeout}ms`,
             'timeout_error'
           );
+          logger.warn(`API タイムアウト: ${url.split('?')[0]} (${timeout}ms)`);
+          throw timeoutError;
         }
         
         // API独自のエラーを再スロー
         if (error.isApiError) {
+          logger.error(`API エラー: ${error.message}`);
           throw error;
         }
         
-        // ネットワークエラー
+        // ネットワークエラー - 開発環境以外ではエラーログを簡略化
         if (error.message.includes('Failed to fetch') || error.message.includes('Network request failed')) {
-          throw new ApiError(
+          const networkError = new ApiError(
             'ネットワークエラー: サーバーに接続できません',
             0,
             error.message,
             'network_error'
           );
+          
+          // 開発環境のみ詳細ログを出力
+          if (process.env.NODE_ENV === 'development') {
+            logger.error(`API ネットワークエラー: ${url.split('?')[0]} - ${error.message}`);
+          } else {
+            logger.error(`API ネットワークエラー: ${url.split('?')[0]}`);
+          }
+          
+          throw networkError;
         }
         
         // その他のエラー
+        logger.error(`API 予期せぬエラー: ${url.split('?')[0]} - ${error.message}`);
         throw new ApiError(
           `予期しないエラー: ${error.message}`,
           0,
@@ -233,6 +269,7 @@ class ApiClient {
     if (cacheTTL > 0) {
       const cachedItem = this.requestCache.get(url);
       if (cachedItem && Date.now() - cachedItem.timestamp < cachedItem.ttl) {
+        logger.debug(`API キャッシュヒット: ${url.split('?')[0]}`);
         return cachedItem.data;
       }
     }
@@ -246,6 +283,7 @@ class ApiClient {
         timestamp: Date.now(), 
         ttl: cacheTTL 
       });
+      logger.debug(`API キャッシュ保存: ${url.split('?')[0]} (TTL: ${cacheTTL}ms)`);
     }
     
     return data;
@@ -268,4 +306,4 @@ class ApiClient {
 }
 
 // シングルトンインスタンスを作成
-export const apiClient = new ApiClient('', 10000); // 10秒タイムアウト（延長：5秒→10秒）
+export const apiClient = new ApiClient('', 10000); // 10秒タイムアウト

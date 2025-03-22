@@ -2,8 +2,7 @@
 
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { APIConnectionStatus } from '../lib/types';
-// インポートパスを変更
-import { testApiConnection } from '../lib/api-init';
+import { testApiConnection, initializeApi, rediscoverApiPort } from '../lib/api-init';
 import { useNotification } from './NotificationContext';
 
 // パフォーマンス測定
@@ -15,6 +14,7 @@ interface ApiContextType {
   status: APIConnectionStatus;
   reconnectAttempts: number;
   checkConnection: (retryDelay?: number) => Promise<boolean>;
+  resetConnection: () => Promise<boolean>;
 }
 
 const ApiContext = createContext<ApiContextType | undefined>(undefined);
@@ -29,10 +29,11 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [reconnectAttempts, setReconnectAttempts] = useState<number>(0);
   const { addNotification } = useNotification();
   
-  // 最適化: isMountedの参照を使用して、アンマウント後の状態更新を防止
+  // 最適化: マウント状態管理と参照保持
   const isMounted = useRef(true);
   const lastConnectionTime = useRef<number | null>(null);
   const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const checkingConnection = useRef<boolean>(false);
   
   // コンポーネントのマウント/アンマウント管理
   useEffect(() => {
@@ -40,108 +41,145 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     
     return () => {
       isMounted.current = false;
-      // タイムアウトのクリーンアップ
       if (connectionTimeoutRef.current) {
         clearTimeout(connectionTimeoutRef.current);
       }
     };
   }, []);
 
-  // 改善されたAPI接続確認関数 - 再試行と遅延戦略を含む
-  const checkConnection = useCallback(async (retryDelay: number = 0, maxRetries: number = 3): Promise<boolean> => {
+  // 改善されたAPI接続確認関数 - 中央集権的な接続管理
+  const checkConnection = useCallback(async (retryDelay: number = 0): Promise<boolean> => {
     if (!isMounted.current) return false;
     
-    // 過度に頻繁な接続チェックを防止（少なくとも500ms間隔を空ける）
-    const now = Date.now();
-    if (lastConnectionTime.current && now - lastConnectionTime.current < 800) { // 間隔拡大：500ms→800ms
+    // 既に確認中の場合は重複実行を避ける
+    if (checkingConnection.current) {
       return status.connected;
     }
+    
+    // 過度に頻繁な接続チェックを防止（少なくとも800ms間隔を空ける）
+    const now = Date.now();
+    if (lastConnectionTime.current && now - lastConnectionTime.current < 800) {
+      return status.connected;
+    }
+    
     lastConnectionTime.current = now;
+    checkingConnection.current = true;
     
     // パフォーマンスマーク
     if (typeof window !== 'undefined') {
       window.performance.mark('connection_check_start');
     }
     
+    // 接続ステータスを更新
     setStatus(prev => ({ ...prev, loading: true }));
     
     if (retryDelay > 0) {
       await new Promise(resolve => setTimeout(resolve, retryDelay));
     }
     
-    let retryCount = 0;
-    let lastError = null;
-    
-    while (retryCount <= maxRetries) {
-      try {
-        const result = await testApiConnection();
-        
-        if (!isMounted.current) return false;
-        
-        if (result.success) {
-          setStatus({
-            connected: true,
-            loading: false,
-            message: result.message || 'APIサーバーに接続しました',
-            lastChecked: new Date(),
-            details: result.details
-          });
-          
-          if (reconnectAttempts > 0) {
-            addNotification('バックエンドサーバーへの接続が回復しました', 'success');
-          }
-          setReconnectAttempts(0);
-          
-          // パフォーマンスマーク - 成功
-          if (typeof window !== 'undefined') {
-            window.performance.mark('connection_check_complete');
-            window.performance.measure('connection_check_duration', 'connection_check_start', 'connection_check_complete');
-          }
-          
-          return true;
-        }
-        
-        lastError = result;
-        break;
-      } catch (error: any) {
-        lastError = error;
-        
-        if (retryCount < maxRetries) {
-          // 指数バックオフ再試行（0.5秒、1秒、2秒...）
-          await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 500));
-          retryCount++;
-        } else {
-          break;
-        }
+    try {
+      // API接続テスト
+      const result = await testApiConnection();
+      
+      if (!isMounted.current) {
+        checkingConnection.current = false;
+        return false;
       }
+      
+      if (result.success) {
+        setStatus({
+          connected: true,
+          loading: false,
+          message: result.message || 'APIサーバーに接続しました',
+          lastChecked: new Date(),
+          details: result.details
+        });
+        
+        if (reconnectAttempts > 0) {
+          addNotification('バックエンドサーバーへの接続が回復しました', 'success');
+        }
+        
+        setReconnectAttempts(0);
+        checkingConnection.current = false;
+        return true;
+      }
+      
+      // 接続失敗
+      setStatus({
+        connected: false,
+        loading: false,
+        message: result.message || 'APIサーバーへの接続に失敗しました',
+        lastChecked: new Date(),
+        details: result.details
+      });
+      
+      setReconnectAttempts(prev => prev + 1);
+      if (reconnectAttempts < 3) {
+        addNotification(result.message || 'APIサーバーへの接続に失敗しました', 'error');
+      }
+      
+      checkingConnection.current = false;
+      return false;
+    } catch (error: any) {
+      if (!isMounted.current) {
+        checkingConnection.current = false;
+        return false;
+      }
+      
+      // エラー処理
+      setStatus({
+        connected: false,
+        loading: false,
+        message: `APIサーバーへの接続中にエラーが発生しました: ${error.message}`,
+        lastChecked: new Date()
+      });
+      
+      setReconnectAttempts(prev => prev + 1);
+      if (reconnectAttempts < 3) {
+        addNotification('APIサーバーへの接続に失敗しました', 'error');
+      }
+      
+      checkingConnection.current = false;
+      return false;
     }
-    
-    // すべての再試行が失敗した場合
-    if (!isMounted.current) return false;
-    
-    setStatus({
-      connected: false,
-      loading: false,
-      message: lastError?.message || 'APIサーバーへの接続に失敗しました',
-      lastChecked: new Date(),
-      details: lastError?.details
-    });
-    
-    setReconnectAttempts(prev => prev + 1);
-    if (reconnectAttempts < 3) {
-      addNotification(lastError?.message || 'APIサーバーへの接続に失敗しました', 'error');
-    }
-    
-    // パフォーマンスマーク - エラー
-    if (typeof window !== 'undefined') {
-      window.performance.mark('connection_check_error');
-      window.performance.measure('connection_check_error_duration', 'connection_check_start', 'connection_check_error');
-    }
-    
-    return false;
   }, [addNotification, reconnectAttempts, status.connected]);
 
-  // 初期接続確認 - 最適化版（複数回の再試行を含む）
+  // 接続リセット機能 - 完全に新しい接続を確立
+  const resetConnection = useCallback(async (): Promise<boolean> => {
+    if (!isMounted.current) return false;
+    
+    setStatus(prev => ({ ...prev, loading: true, message: 'API接続をリセット中...' }));
+    
+    try {
+      // APIポート再検出を実行
+      const port = await rediscoverApiPort();
+      
+      if (!port || !isMounted.current) {
+        setStatus(prev => ({ 
+          ...prev, 
+          loading: false, 
+          connected: false,
+          message: 'APIポート再検出に失敗しました'
+        }));
+        return false;
+      }
+      
+      // 接続確認
+      return await checkConnection();
+    } catch (error: any) {
+      if (isMounted.current) {
+        setStatus(prev => ({ 
+          ...prev, 
+          loading: false, 
+          connected: false,
+          message: `接続リセット中にエラーが発生しました: ${error.message}`
+        }));
+      }
+      return false;
+    }
+  }, [checkConnection]);
+
+  // 初期接続確認 - アプリケーション起動時の一度だけ実行
   useEffect(() => {
     // パフォーマンスマーク
     if (typeof window !== 'undefined') {
@@ -157,34 +195,20 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           message: 'API接続タイムアウト。再試行してください。'
         }));
       }
-    }, 15000); // 延長：10秒→15秒タイムアウト
+    }, 15000); // 15秒タイムアウト
     
+    // API初期化処理
     const initializeConnection = async () => {
-      // 複数回再試行を含む接続確認
-      await checkConnection(0, 3); // 最大3回再試行
-      
-      // パフォーマンスマーク
-      if (typeof window !== 'undefined' && isMounted.current) {
-        window.performance.mark('initial_connection_check_complete');
-        window.performance.measure(
-          'initial_connection_check_duration',
-          'initial_connection_check_start',
-          'initial_connection_check_complete'
-        );
-      }
-      
-      // 接続成功時は定期的なチェックを設定
-      if (isMounted.current && status.connected) {
-        // 定期的に接続を確認 - 間隔を8分に拡大（負荷軽減）
-        const intervalId = setInterval(() => {
-          if (isMounted.current) {
-            checkConnection();
-          }
-        }, 8 * 60 * 1000); // 8分ごと
+      try {
+        // API初期化の一元管理
+        await initializeApi();
         
-        return () => {
-          clearInterval(intervalId);
-        };
+        // 接続確認を実行
+        if (isMounted.current) {
+          await checkConnection();
+        }
+      } catch (error) {
+        console.error('初期接続エラー:', error);
       }
     };
     
@@ -197,7 +221,45 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         connectionTimeoutRef.current = null;
       }
     };
-  }, [checkConnection, status.connected, status.loading]);
+  }, [checkConnection]);
+
+  // 接続状態監視 - 接続確立後の定期的なヘルスチェック
+  useEffect(() => {
+    if (!isMounted.current) return;
+    
+    // 最初の接続チェックを1秒後に再試行
+    if (!status.connected && status.loading) {
+      const initialCheckTimer = setTimeout(() => {
+        checkConnection(0);
+      }, 1000);
+      
+      return () => clearTimeout(initialCheckTimer);
+    }
+    
+    // 接続成功時は定期的なチェックを設定
+    if (status.connected) {
+      const intervalId = setInterval(() => {
+        if (isMounted.current && !checkingConnection.current) {
+          checkConnection();
+        }
+      }, 60 * 1000); // 1分ごとにチェック (8分 → 1分に短縮)
+      
+      return () => {
+        clearInterval(intervalId);
+      };
+    } else if (!status.loading) {
+      // 接続失敗時は30秒ごとに自動再試行
+      const retryId = setTimeout(() => {
+        if (isMounted.current && !checkingConnection.current) {
+          checkConnection();
+        }
+      }, 30 * 1000);
+      
+      return () => {
+        clearTimeout(retryId);
+      };
+    }
+  }, [status.connected, status.loading, checkConnection]);
 
   // パフォーマンスマーク - 初期化完了
   useEffect(() => {
@@ -208,7 +270,7 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   return (
-    <ApiContext.Provider value={{ status, reconnectAttempts, checkConnection }}>
+    <ApiContext.Provider value={{ status, reconnectAttempts, checkConnection, resetConnection }}>
       {children}
     </ApiContext.Provider>
   );

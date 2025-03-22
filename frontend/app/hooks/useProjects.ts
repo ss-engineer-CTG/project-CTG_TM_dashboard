@@ -1,14 +1,11 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Project, DashboardMetrics, APIConnectionStatus, ErrorInfo } from '../lib/types';
-import { getProjects, getMetrics, openFile, getInitialData } from '../lib/services';
-// インポートパスを変更
-import { testApiConnection } from '../lib/api-init';
+import { Project, DashboardMetrics, ErrorInfo } from '../lib/types';
+import { getInitialData, openFile } from '../lib/services';
 import { useNotification } from '../contexts/NotificationContext';
 import { useApi } from '../contexts/ApiContext';
-import { isClient, isElectronEnvironment } from '../lib/utils/environment';
-import { setupIpcListeners } from '../lib/electron-utils';
+import { isClient } from '../lib/utils/environment';
 
 // パフォーマンス計測
 if (typeof window !== 'undefined') {
@@ -25,13 +22,9 @@ const persistData = (key: string, data: any) => {
       try {
         localStorage.setItem(`dashboard_${key}_timestamp`, Date.now().toString());
         localStorage.setItem(`dashboard_${key}`, JSON.stringify(data));
-      } catch (e) {
-        console.warn(`データ保存エラー (${key}):`, e);
-      }
+      } catch (e) {}
     }, 0);
-  } catch (e) {
-    // エラーハンドリング - 何もしない
-  }
+  } catch (e) {}
 };
 
 // 保存データのロード関数 - 最適化版
@@ -68,12 +61,13 @@ export const useProjects = (filePath: string | null) => {
   // 最適化: isMountedの参照を使用して、アンマウント後の状態更新を防止
   const isMounted = useRef(true);
   const lastFetchTime = useRef<number>(0);
+  const fetchingData = useRef<boolean>(false);
   
   // キャッシュからの初期ロードフラグ
   const [initialLoadDone, setInitialLoadDone] = useState<boolean>(false);
   
   // APIコンテキストを使用
-  const { status: apiStatus, reconnectAttempts, checkConnection: checkApiConnection } = useApi();
+  const { status: apiStatus } = useApi();
 
   // コンポーネントのマウント/アンマウント管理
   useEffect(() => {
@@ -83,78 +77,6 @@ export const useProjects = (filePath: string | null) => {
       isMounted.current = false;
     };
   }, []);
-
-  // Electron IPCリスナーのセットアップ - 最適化版
-  useEffect(() => {
-    if (!isClient || !isElectronEnvironment()) return;
-    
-    // パフォーマンスマーク
-    if (typeof window !== 'undefined') {
-      window.performance.mark('electron_listeners_setup_start');
-    }
-    
-    // Electron IPCリスナーを設定
-    const cleanupListeners = setupIpcListeners({
-      onConnectionEstablished: (data) => {
-        if (!isMounted.current) return;
-        
-        console.log('API接続確立:', data);
-        addNotification(`APIサーバーへの接続が確立されました`, 'success');
-        
-        // 接続が確立されたら自動的にデータを更新
-        if (filePath) {
-          fetchData();
-        }
-      },
-      
-      onServerDown: (data) => {
-        if (!isMounted.current) return;
-        
-        console.error('APIサーバーダウン:', data);
-        addNotification(data.message || 'バックエンドサーバーが応答していません', 'error');
-        
-        // エラー表示を更新
-        setError({
-          message: 'バックエンドサーバーが応答していません',
-          details: {
-            message: data.message,
-            time: new Date().toISOString()
-          }
-        });
-      },
-      
-      onServerRestarted: (data) => {
-        if (!isMounted.current) return;
-        
-        console.log('APIサーバー再起動:', data);
-        addNotification(`バックエンドサーバーが再起動しました`, 'info');
-        
-        // サーバーが再起動したら自動的にデータを更新
-        if (filePath) {
-          setTimeout(() => {
-            if (isMounted.current) {
-              fetchData();
-            }
-          }, 1000); // 少し待ってからデータ取得
-        }
-      }
-    });
-    
-    // パフォーマンスマーク
-    if (typeof window !== 'undefined') {
-      window.performance.mark('electron_listeners_setup_complete');
-      window.performance.measure(
-        'electron_listeners_setup_duration',
-        'electron_listeners_setup_start',
-        'electron_listeners_setup_complete'
-      );
-    }
-    
-    // クリーンアップ
-    return () => {
-      if (cleanupListeners) cleanupListeners();
-    };
-  }, [addNotification, filePath]);
 
   // キャッシュからデータを読み込む - 最適化版
   useEffect(() => {
@@ -190,39 +112,47 @@ export const useProjects = (filePath: string | null) => {
 
   // 改善されたデータ取得関数 - 最適化版
   const fetchData = useCallback(async () => {
-    if (!isClient || !isMounted.current) return;
-    if (!filePath) {
-      addNotification('ファイルが選択されていません', 'error');
+    if (!isClient || !isMounted.current || !filePath) {
+      return;
+    }
+    
+    // 既にデータ取得中の場合は重複実行を避ける
+    if (fetchingData.current) {
       return;
     }
     
     // デバウンス - 連続した呼び出しを防止（500ms以内）
     const now = Date.now();
     if (now - lastFetchTime.current < 500) {
-      console.log('連続したデータ取得をスキップ');
       return;
     }
+    
     lastFetchTime.current = now;
+    fetchingData.current = true;
     
     // パフォーマンスマーク
     if (typeof window !== 'undefined') {
       window.performance.mark('fetch_data_start');
     }
     
-    // API接続確認
+    // API接続が確立されていることを確認
     if (!apiStatus.connected) {
-      const isConnected = await checkApiConnection();
-      if (!isConnected || !isMounted.current) return;
+      console.log('API接続が確立されていないため、データ取得をスキップします');
+      fetchingData.current = false;
+      return;
     }
 
     setIsLoading(true);
     setError(null);
     
     try {
-      // 最適化: 両方のデータを一度のリクエストで取得
+      // 両方のデータを一度のリクエストで取得
       const initialData = await getInitialData(filePath);
       
-      if (!isMounted.current) return;
+      if (!isMounted.current) {
+        fetchingData.current = false;
+        return;
+      }
       
       if (initialData.projects) {
         setProjects(initialData.projects);
@@ -251,7 +181,10 @@ export const useProjects = (filePath: string | null) => {
       
       console.error('データ取得エラー:', error);
       
-      if (!isMounted.current) return;
+      if (!isMounted.current) {
+        fetchingData.current = false;
+        return;
+      }
       
       setError({ message: errorMessage, details: errorDetails });
       addNotification(errorMessage, 'error');
@@ -265,8 +198,9 @@ export const useProjects = (filePath: string | null) => {
       if (isMounted.current) {
         setIsLoading(false);
       }
+      fetchingData.current = false;
     }
-  }, [filePath, addNotification, apiStatus.connected, checkApiConnection]);
+  }, [filePath, addNotification, apiStatus.connected]);
 
   // ファイルパスが変更されたら自動的にデータを再取得 - 最適化版
   useEffect(() => {
@@ -286,9 +220,10 @@ export const useProjects = (filePath: string | null) => {
 
   // データ更新関数 - 最適化版
   const refreshData = useCallback(async () => {
-    if (!isClient || !isMounted.current) return;
-    if (!filePath) {
-      addNotification('ファイルが選択されていません', 'error');
+    if (!isClient || !isMounted.current || !filePath) {
+      if (!filePath) {
+        addNotification('ファイルが選択されていません', 'error');
+      }
       return;
     }
 
@@ -373,7 +308,7 @@ export const useProjects = (filePath: string | null) => {
     const startAutoRefresh = () => {
       if (intervalId) clearInterval(intervalId);
       intervalId = setInterval(() => {
-        if (isActive && isMounted.current) fetchData();
+        if (isActive && isMounted.current && !fetchingData.current) fetchData();
       }, 8 * 60 * 1000); // 8分ごと
     };
     
@@ -406,12 +341,9 @@ export const useProjects = (filePath: string | null) => {
     projects,
     metrics,
     isLoading,
-    apiStatus,
-    reconnectAttempts,
     error,
     refreshData,
     fetchData,
-    openFile: handleOpenFile,
-    checkApiConnection
+    openFile: handleOpenFile
   };
 };

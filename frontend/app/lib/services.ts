@@ -2,12 +2,30 @@ import { apiClient } from './client';
 import { initializeApi } from './api-init'; // 循環依存を解決するために修正
 import { Project, DashboardMetrics, FileResponse, RecentTasks, HealthResponse, ShutdownResponse } from './types';
 import { isClient, isElectronEnvironment, getApiInitialized } from './utils/environment';
-import { testApiConnection } from './api-init'; // testApiConnectionも移動
 
 // パフォーマンス計測
 if (typeof window !== 'undefined') {
   window.performance.mark('services_module_init');
 }
+
+// ログレベル定義
+const LogLevel = {
+  ERROR: 0,
+  WARNING: 1,
+  INFO: 2,
+  DEBUG: 3
+};
+
+// 現在のログレベル（環境に応じて設定）
+const currentLogLevel = process.env.NODE_ENV === 'development' ? LogLevel.DEBUG : LogLevel.WARNING;
+
+// ロガー関数
+const logger = {
+  error: (message: string) => console.error(`[Services] ${message}`),
+  warn: (message: string) => currentLogLevel >= LogLevel.WARNING && console.warn(`[Services] ${message}`),
+  info: (message: string) => currentLogLevel >= LogLevel.INFO && console.info(`[Services] ${message}`),
+  debug: (message: string) => currentLogLevel >= LogLevel.DEBUG && console.debug(`[Services] ${message}`)
+};
 
 // API要求キャッシュ - 同一リクエストの重複実行防止用
 const requestCache = new Map<string, {
@@ -29,22 +47,14 @@ const withApiInitialized = async <T>(fn: () => Promise<T>, cacheKey?: string, ca
     
     // 指定されたTTL内ならキャッシュを返す
     if (now - cachedRequest.timestamp < cacheTTL) {
-      // パフォーマンスマーク - キャッシュヒット
-      if (typeof window !== 'undefined') {
-        window.performance.mark(`api_request_${cacheKey}_cache_hit`);
-        window.performance.measure(
-          `api_request_${cacheKey}_cache_hit_duration`,
-          `api_request_${cacheKey}_start`,
-          `api_request_${cacheKey}_cache_hit`
-        );
-      }
-      
+      logger.debug(`リクエストキャッシュヒット: ${cacheKey}`);
       return cachedRequest.promise;
     }
   }
   
-  // API初期化状態を確認
+  // API初期化状態を確認 - 一度だけ初期化を実行
   if (!getApiInitialized()) {
+    logger.info('APIを初期化中...');
     await initializeApi();
   }
   
@@ -67,27 +77,6 @@ const withApiInitialized = async <T>(fn: () => Promise<T>, cacheKey?: string, ca
     }
   }
   
-  // リクエスト完了時にパフォーマンスマークを記録
-  promise.then(() => {
-    if (typeof window !== 'undefined' && cacheKey) {
-      window.performance.mark(`api_request_${cacheKey}_success`);
-      window.performance.measure(
-        `api_request_${cacheKey}_success_duration`,
-        `api_request_${cacheKey}_start`,
-        `api_request_${cacheKey}_success`
-      );
-    }
-  }).catch(() => {
-    if (typeof window !== 'undefined' && cacheKey) {
-      window.performance.mark(`api_request_${cacheKey}_error`);
-      window.performance.measure(
-        `api_request_${cacheKey}_error_duration`,
-        `api_request_${cacheKey}_start`,
-        `api_request_${cacheKey}_error`
-      );
-    }
-  });
-  
   return promise;
 };
 
@@ -102,12 +91,14 @@ export const getInitialData = async (filePath: string): Promise<{
     window.performance.mark('get_initial_data_start');
   }
   
+  logger.info(`初期データ取得開始: ${filePath}`);
+  
   return withApiInitialized(async () => {
     try {
       // メトリクスとプロジェクトデータを並列に取得
       const [metricsData, projectsData] = await Promise.allSettled([
-        apiClient.get<DashboardMetrics>('/metrics', { file_path: filePath }, { timeout: 8000 }), // タイムアウト延長: 3000ms→8000ms
-        apiClient.get<Project[]>('/projects', { file_path: filePath }, { timeout: 8000 }) // タイムアウト延長: 3000ms→8000ms
+        apiClient.get<DashboardMetrics>('/metrics', { file_path: filePath }, { timeout: 8000 }),
+        apiClient.get<Project[]>('/projects', { file_path: filePath }, { timeout: 8000 })
       ]);
       
       const result: any = {};
@@ -123,31 +114,14 @@ export const getInitialData = async (filePath: string): Promise<{
       
       // エラーがあれば最初のエラーを設定
       if (metricsData.status === 'rejected' && projectsData.status === 'rejected') {
+        logger.error(`初期データ取得の両方が失敗: ${metricsData.reason.message}`);
         result.error = metricsData.reason;
       }
       
-      // パフォーマンスマーク - 成功
-      if (typeof window !== 'undefined') {
-        window.performance.mark('get_initial_data_complete');
-        window.performance.measure(
-          'get_initial_data_duration',
-          'get_initial_data_start',
-          'get_initial_data_complete'
-        );
-      }
-      
+      logger.info('初期データ取得完了');
       return result;
     } catch (error: any) {
-      // パフォーマンスマーク - エラー
-      if (typeof window !== 'undefined') {
-        window.performance.mark('get_initial_data_error');
-        window.performance.measure(
-          'get_initial_data_error_duration',
-          'get_initial_data_start',
-          'get_initial_data_error'
-        );
-      }
-      
+      logger.error(`初期データ取得エラー: ${error.message}`);
       return { error };
     }
   }, `initial_data_${filePath}`, 2000); // 2秒キャッシュ
@@ -156,68 +130,52 @@ export const getInitialData = async (filePath: string): Promise<{
 // プロジェクト一覧の取得 - 最適化版
 export const getProjects = async (filePath?: string): Promise<Project[]> => {
   return withApiInitialized(async () => {
-    try {
-      const cacheKey = `projects_${filePath || 'default'}`;
-      const data = await apiClient.get<Project[]>(
-        '/projects',
-        { file_path: filePath },
-        { timeout: 8000 } // タイムアウト延長: 5000ms→8000ms
-      );
-      return data;
-    } catch (error: any) {
-      throw error;
-    }
+    logger.debug(`プロジェクト一覧取得: ${filePath || 'デフォルト'}`);
+    const data = await apiClient.get<Project[]>(
+      '/projects',
+      { file_path: filePath },
+      { timeout: 8000 }
+    );
+    return data;
   }, `projects_${filePath || 'default'}`, 5000); // 5秒キャッシュ
 };
 
 // プロジェクト詳細の取得 - 最適化版
 export const getProject = async (projectId: string, filePath?: string): Promise<Project> => {
   return withApiInitialized(async () => {
-    try {
-      const cacheKey = `project_${projectId}_${filePath || 'default'}`;
-      const data = await apiClient.get<Project>(
-        `/projects/${projectId}`,
-        { file_path: filePath },
-        { timeout: 8000 } // タイムアウト延長: 5000ms→8000ms
-      );
-      return data;
-    } catch (error: any) {
-      throw error;
-    }
+    logger.debug(`プロジェクト詳細取得: ${projectId}, ファイル: ${filePath || 'デフォルト'}`);
+    const data = await apiClient.get<Project>(
+      `/projects/${projectId}`,
+      { file_path: filePath },
+      { timeout: 8000 }
+    );
+    return data;
   }, `project_${projectId}_${filePath || 'default'}`, 5000); // 5秒キャッシュ
 };
 
 // プロジェクトの直近タスク情報を取得 - 最適化版
 export const getRecentTasks = async (projectId: string, filePath?: string): Promise<RecentTasks> => {
   return withApiInitialized(async () => {
-    try {
-      const cacheKey = `recent_tasks_${projectId}_${filePath || 'default'}`;
-      const data = await apiClient.get<RecentTasks>(
-        `/projects/${projectId}/recent-tasks`,
-        { file_path: filePath },
-        { timeout: 5000 } // タイムアウト延長: 3000ms→5000ms
-      );
-      return data;
-    } catch (error: any) {
-      throw error;
-    }
+    logger.debug(`直近タスク情報取得: ${projectId}, ファイル: ${filePath || 'デフォルト'}`);
+    const data = await apiClient.get<RecentTasks>(
+      `/projects/${projectId}/recent-tasks`,
+      { file_path: filePath },
+      { timeout: 5000 }
+    );
+    return data;
   }, `recent_tasks_${projectId}_${filePath || 'default'}`, 10000); // 10秒キャッシュ
 };
 
 // ダッシュボードメトリクスの取得 - 最適化版
 export const getMetrics = async (filePath?: string): Promise<DashboardMetrics> => {
   return withApiInitialized(async () => {
-    try {
-      const cacheKey = `metrics_${filePath || 'default'}`;
-      const data = await apiClient.get<DashboardMetrics>(
-        '/metrics',
-        { file_path: filePath },
-        { timeout: 8000 } // タイムアウト延長: 5000ms→8000ms
-      );
-      return data;
-    } catch (error: any) {
-      throw error;
-    }
+    logger.debug(`メトリクス取得: ${filePath || 'デフォルト'}`);
+    const data = await apiClient.get<DashboardMetrics>(
+      '/metrics',
+      { file_path: filePath },
+      { timeout: 8000 }
+    );
+    return data;
   }, `metrics_${filePath || 'default'}`, 5000); // 5秒キャッシュ
 };
 
@@ -226,21 +184,29 @@ export const getDefaultPath = async (): Promise<FileResponse> => {
   return withApiInitialized(async () => {
     try {
       // ローカルストレージから前回のパスをチェック
-      try {
-        const lastPath = localStorage.getItem('lastSelectedPath');
-        if (lastPath) {
-          return {
-            success: true,
-            message: '前回のファイルパスを使用します',
-            path: lastPath
-          };
+      if (isClient) {
+        try {
+          const lastPath = localStorage.getItem('lastSelectedPath');
+          if (lastPath) {
+            logger.info(`ローカルストレージから前回のパスを使用: ${lastPath}`);
+            return {
+              success: true,
+              message: '前回のファイルパスを使用します',
+              path: lastPath
+            };
+          }
+        } catch (e) {
+          logger.debug('ローカルストレージからのパス読み込み失敗');
         }
-      } catch (e) {}
+      }
       
       // APIから取得
-      const data = await apiClient.get<FileResponse>('/files/default-path', undefined, { timeout: 5000 }); // タイムアウト延長: 3000ms→5000ms
+      logger.debug('デフォルトパスをAPIから取得');
+      const data = await apiClient.get<FileResponse>('/files/default-path', undefined, { timeout: 5000 });
       return data;
     } catch (error: any) {
+      logger.warn(`デフォルトパス取得エラー: ${error.message}`);
+      
       // エラーが発生してもFileResponse形式で返す
       return {
         success: false,
@@ -257,12 +223,14 @@ export const getDefaultPath = async (): Promise<FileResponse> => {
 export const openFile = async (path: string): Promise<FileResponse> => {
   return withApiInitialized(async () => {
     try {
+      logger.debug(`ファイルを開く: ${path}`);
+      
       // Electron環境の場合は直接ファイルを開く
       if (isElectronEnvironment() && window.electron?.fs?.exists) {
         try {
           const exists = await window.electron.fs.exists(path);
           if (exists) {
-            // OSの標準機能でファイルを開く（electron-shellの代わり）
+            // OSの標準機能でファイルを開く
             await window.electron.testDialog();
             return {
               success: true,
@@ -271,16 +239,15 @@ export const openFile = async (path: string): Promise<FileResponse> => {
             };
           }
         } catch (e) {
-          console.error('Electronファイルオープンエラー:', e);
-          // Electron APIエラーの場合はAPI経由でフォールバック
+          logger.debug('Electronでのファイルオープンに失敗、APIにフォールバック');
         }
       }
       
       // API経由でファイルを開く
-      const data = await apiClient.post<FileResponse>('/files/open', { path }, undefined, { timeout: 8000 }); // タイムアウト延長: 5000ms→8000ms
+      const data = await apiClient.post<FileResponse>('/files/open', { path }, undefined, { timeout: 8000 });
       return data;
     } catch (error: any) {
-      console.error('ファイルを開く際のエラー:', error);
+      logger.error(`ファイルを開く際のエラー: ${error.message}`);
       
       // エラーが発生してもFileResponse形式で返す
       return {
@@ -298,16 +265,17 @@ export const openFile = async (path: string): Promise<FileResponse> => {
 export const selectFile = async (initialPath?: string): Promise<FileResponse> => {
   return withApiInitialized(async () => {
     try {
+      logger.debug(`ファイル選択ダイアログを表示: ${initialPath || 'デフォルト'}`);
+      
       // Electron環境チェック
       if (isElectronEnvironment() && window.electron?.dialog?.openCSVFile) {
         try {
           // Electron経由でファイル選択
-          console.log('Electron経由でCSVファイル選択を実行します...');
+          logger.info('Electron経由でCSVファイル選択を実行');
           const result = await window.electron.dialog.openCSVFile(initialPath || '');
           return result;
         } catch (dialogError) {
-          console.error('Electronダイアログエラー:', dialogError);
-          // Electronダイアログエラーの場合はAPI経由でフォールバック
+          logger.warn(`Electronダイアログエラー: ${dialogError.message}`);
         }
       }
       
@@ -315,11 +283,11 @@ export const selectFile = async (initialPath?: string): Promise<FileResponse> =>
       const data = await apiClient.get<FileResponse>(
         '/files/select',
         { initial_path: initialPath },
-        { timeout: 15000 } // タイムアウト延長: 10000ms→15000ms
+        { timeout: 15000 }
       );
       return data;
     } catch (error: any) {
-      console.error('ファイル選択エラー:', error);
+      logger.error(`ファイル選択エラー: ${error.message}`);
       return {
         success: false,
         message: error.isApiError
@@ -331,71 +299,19 @@ export const selectFile = async (initialPath?: string): Promise<FileResponse> =>
   });
 };
 
-// API健全性チェック - 最適化版（リトライ機能追加）
-export const healthCheck = async (retries: number = 2): Promise<HealthResponse> => {
+// API健全性チェック - initializeApi内で実行されるようになったため簡略化
+export const healthCheck = async (): Promise<HealthResponse> => {
   return withApiInitialized(async () => {
-    let lastError = null;
-    
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      try {
-        const data = await apiClient.get<HealthResponse>('/health', undefined, { 
-          timeout: 5000 // タイムアウト延長: 2000ms→5000ms
-        });
-        return data;
-      } catch (error: any) {
-        lastError = error;
-        
-        // 最後の試行でなければ、少し待ってから再試行
-        if (attempt < retries) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-      }
-    }
-    
-    throw lastError;
-  });
-};
-
-// バックエンドのシャットダウンをリクエスト - 最適化版
-export const requestShutdown = async (): Promise<ShutdownResponse> => {
-  return withApiInitialized(async () => {
-    try {
-      const data = await apiClient.post<ShutdownResponse>('/shutdown', undefined, undefined, { 
-        timeout: 5000 // タイムアウト延長: 2000ms→5000ms
-      });
-      return data;
-    } catch (error: any) {
-      console.error('シャットダウンリクエストエラー:', error);
-      throw error;
-    }
+    logger.debug('API健全性チェックを実行');
+    const data = await apiClient.get<HealthResponse>('/health', undefined, { timeout: 5000 });
+    return data;
   });
 };
 
 // キャッシュ管理 - リクエストキャッシュをクリア
 export const clearRequestCache = (): void => {
   requestCache.clear();
-};
-
-// サーバー診断情報の取得 - 新機能
-export const getServerDiagnostics = async (): Promise<any> => {
-  return withApiInitialized(async () => {
-    try {
-      // デバッグモードの場合のみ診断情報を取得
-      if (process.env.NODE_ENV === 'development') {
-        const data = await apiClient.get('/debug', undefined, { timeout: 5000 });
-        return data;
-      }
-      return { 
-        message: 'Server diagnostics only available in development mode',
-        timestamp: new Date().toISOString()
-      };
-    } catch (error: any) {
-      return {
-        error: error.message,
-        timestamp: new Date().toISOString()
-      };
-    }
-  });
+  logger.info('リクエストキャッシュをクリア');
 };
 
 // パフォーマンスマーク - 初期化完了
@@ -409,5 +325,4 @@ if (typeof window !== 'undefined') {
 }
 
 export * from './client';
-// 循環依存を防ぐために、connection.tsからのエクスポートを避ける
-// export * from './connection';
+// connection.tsを削除したので、このエクスポートは不要

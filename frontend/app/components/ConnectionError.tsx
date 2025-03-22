@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+'use client';
 
-// クライアントサイドのみの処理を判定するヘルパー関数
-const isClient = typeof window !== 'undefined';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useApi } from '@/app/contexts/ApiContext'; // 追加: APIコンテキストをインポート
 
 interface ConnectionErrorProps {
   onRetry: () => void;
@@ -22,43 +22,39 @@ const ConnectionError: React.FC<ConnectionErrorProps> = ({
   const [countdown, setCountdown] = useState(0);
   const [diagnosticInfo, setDiagnosticInfo] = useState<any>(null);
   
-  // 診断情報の収集
+  // 追加: APIコンテキストから状態を取得
+  const { status: apiStatus } = useApi();
+  
+  // 診断情報の収集 - マウント時に一度だけ実行
   useEffect(() => {
-    if (isClient && window.electron?.diagnostics) {
-      try {
-        const collectDiagnostics = async () => {
-          try {
-            const apiStatus = await window.electron.diagnostics.checkApiConnection();
-            setDiagnosticInfo({
-              apiStatus,
-              electronReady: window.electronReady,
-              startupTime: window.electron.diagnostics.getStartupTime(),
-              isElectron: window.electron.env.isElectron,
-              apiInitialized: window.apiInitialized,
-              currentApiPort: window.currentApiPort,
-              timestamp: Date.now()
-            });
-          } catch (e) {
-            setDiagnosticInfo({
-              error: e.message,
-              timestamp: Date.now()
-            });
-          }
-        };
-        
-        collectDiagnostics();
-      } catch (e) {
-        console.error('診断情報収集エラー:', e);
+    const collectDiagnostics = async () => {
+      if (typeof window !== 'undefined' && window.electron?.diagnostics) {
+        try {
+          const apiStatus = await window.electron.diagnostics.checkApiConnection();
+          setDiagnosticInfo({
+            apiStatus,
+            electronReady: window.electronReady,
+            startupTime: window.electron.diagnostics.getStartupTime(),
+            isElectron: window.electron.env.isElectron,
+            apiInitialized: window.apiInitialized,
+            currentApiPort: window.currentApiPort,
+            timestamp: Date.now()
+          });
+        } catch (e) {
+          setDiagnosticInfo({
+            error: e.message,
+            timestamp: Date.now()
+          });
+        }
       }
-    }
+    };
+    
+    collectDiagnostics();
   }, []);
   
-  // 自動再試行機能 - クライアントサイドでのみ実行
+  // 自動再試行のカウントダウンロジック - setState in render 問題を修正
   useEffect(() => {
-    // サーバーサイドレンダリング時は何もしない
-    if (!isClient) return;
-
-    // 最初の5回は自動再試行（回数増加：3→5）
+    // 最初の5回は自動再試行
     if (attempts <= 5) {
       const autoRetryTime = 30 - (attempts * 3); // 回数ごとの待機時間調整
       setCountdown(autoRetryTime);
@@ -67,7 +63,6 @@ const ConnectionError: React.FC<ConnectionErrorProps> = ({
         setCountdown(prev => {
           if (prev <= 1) {
             clearInterval(timer);
-            handleRetry();
             return 0;
           }
           return prev - 1;
@@ -78,7 +73,8 @@ const ConnectionError: React.FC<ConnectionErrorProps> = ({
     }
   }, [attempts]);
   
-  const handleRetry = async () => {
+  // 再試行処理 - 直接レンダー中に状態更新しないように修正
+  const handleRetry = useCallback(async () => {
     if (isRetrying) return;
     
     setIsRetrying(true);
@@ -87,11 +83,23 @@ const ConnectionError: React.FC<ConnectionErrorProps> = ({
     } finally {
       setIsRetrying(false);
     }
-  };
+  }, [isRetrying, onRetry]);
+  
+  // カウントダウンが0になった時の自動再試行
+  useEffect(() => {
+    if (countdown === 0 && attempts <= 5) {
+      handleRetry();
+    }
+  }, [countdown, attempts, handleRetry]);
+
+  // 追加: APIが接続済みの場合は何も表示しない
+  if (apiStatus.connected) {
+    return null;
+  }
 
   // ネットワーク状態を安全に取得する関数
   const getNetworkStatus = () => {
-    return isClient ? (navigator.onLine ? 'はい' : 'いいえ') : '不明';
+    return typeof window !== 'undefined' ? (navigator.onLine ? 'はい' : 'いいえ') : '不明';
   };
 
   // Pythonプロセスに関するトラブルシューティングガイド

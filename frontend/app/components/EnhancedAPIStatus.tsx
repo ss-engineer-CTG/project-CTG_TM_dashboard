@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { APIConnectionStatus } from '@/app/lib/types';
+import React, { useState, useEffect, useCallback } from 'react';
+import { usePathname } from 'next/navigation';
 import { useApi } from '@/app/contexts/ApiContext';
 import { isClient } from '@/app/lib/utils/environment';
 
@@ -16,57 +16,54 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
   const [showDebug, setShowDebug] = useState(false);
   
   // APIコンテキストから状態を取得
-  const { status: apiStatus, reconnectAttempts, checkConnection } = useApi();
+  const { status: apiStatus, checkConnection, resetConnection } = useApi();
   
-  // 診断情報の収集
+  // 診断情報の収集 - 最適化版
   useEffect(() => {
-    if (isClient && !apiStatus.connected && reconnectAttempts > 0) {
-      const collectDebugInfo = async () => {
-        const info: any = {};
-        
-        // Electron情報
-        if (window.electron) {
-          info.isElectron = true;
-          info.electronReady = window.electronReady || false;
-          info.apiInitialized = window.apiInitialized || false;
-          
-          try {
-            info.apiBaseUrl = await window.electron.getApiBaseUrl();
-          } catch (e) {
-            info.apiBaseUrlError = e.message;
-          }
-        } else {
-          info.isElectron = false;
-        }
-        
-        // ポート情報
-        info.currentApiPort = window.currentApiPort;
-        
-        // ユーザーエージェント
-        info.userAgent = navigator.userAgent;
-        
-        setDebugInfo(info);
-      };
+    if (!isClient || apiStatus.connected || apiStatus.reconnectAttempts === 0) return;
+    
+    const collectDebugInfo = async () => {
+      const info: any = {};
       
-      collectDebugInfo();
-    }
-  }, [apiStatus.connected, reconnectAttempts]);
+      // Electron情報
+      if (window.electron) {
+        info.isElectron = true;
+        info.electronReady = window.electronReady || false;
+        info.apiInitialized = window.apiInitialized || false;
+        
+        try {
+          info.apiBaseUrl = await window.electron.getApiBaseUrl();
+        } catch (e) {
+          info.apiBaseUrlError = e.message;
+        }
+      } else {
+        info.isElectron = false;
+      }
+      
+      // ポート情報
+      info.currentApiPort = window.currentApiPort;
+      
+      // ユーザーエージェント
+      info.userAgent = navigator.userAgent;
+      
+      setDebugInfo(info);
+    };
+    
+    collectDebugInfo();
+  }, [apiStatus.connected, apiStatus.reconnectAttempts]);
   
-  // 自動再接続のカウントダウン - クライアントサイドでのみ実行
+  // 自動再接続のカウントダウン - 最適化版
   useEffect(() => {
-    // サーバーサイドレンダリング時は何もしない
-    if (!isClient) return;
-
-    // コンポーネントのマウント状態を追跡するフラグ
+    // コンポーネントのマウント状態を追跡
     let isMounted = true;
     
-    if (apiStatus.connected || !apiStatus.message.includes('接続できません')) {
+    if (!isClient || apiStatus.connected || !apiStatus.message.includes('接続できません')) {
       return;
     }
     
     // 初めての数回の失敗では自動再接続を試みる
-    if (reconnectAttempts < 5) { // 回数増加: 3→5
-      const autoRetryTime = 15 - (reconnectAttempts * 3); // 時間調整: 15→15, 5単位→3単位
+    if (apiStatus.reconnectAttempts < 5) {
+      const autoRetryTime = 15 - (apiStatus.reconnectAttempts * 3);
       setCountdown(autoRetryTime);
       
       const timer = setInterval(() => {
@@ -75,7 +72,6 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
         setCountdown(prev => {
           if (prev <= 1) {
             clearInterval(timer);
-            handleRetry();
             return 0;
           }
           return prev - 1;
@@ -91,10 +87,17 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
     return () => {
       isMounted = false;
     };
-  }, [apiStatus.connected, apiStatus.message, reconnectAttempts]);
+  }, [apiStatus.connected, apiStatus.message, apiStatus.reconnectAttempts]);
   
-  // 再接続ハンドラー
-  const handleRetry = async () => {
+  // カウントダウンが0になったときの自動再接続
+  useEffect(() => {
+    if (countdown === 0 && apiStatus.reconnectAttempts < 5 && !apiStatus.connected && !isReconnecting) {
+      handleRetry();
+    }
+  }, [countdown, apiStatus.reconnectAttempts, apiStatus.connected, isReconnecting]);
+  
+  // 再接続ハンドラー - useCallback で安定化
+  const handleRetry = useCallback(async () => {
     if (isReconnecting) return;
     
     setIsReconnecting(true);
@@ -104,10 +107,20 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
     } finally {
       setIsReconnecting(false);
     }
-  };
+  }, [isReconnecting, checkConnection, onRetry]);
   
-  // 接続済みの場合は簡略表示
+  // 修正: 接続済みの場合は簡略表示、タイムアウトを設定して再確認
   if (apiStatus.connected && !apiStatus.loading) {
+    // 追加: 念のため30秒後に接続を再確認
+    useEffect(() => {
+      const timer = setTimeout(() => {
+        // 静かに再確認
+        checkConnection(0).catch(() => {});
+      }, 30000);
+      
+      return () => clearTimeout(timer);
+    }, [checkConnection]);
+    
     return (
       <div className="mb-4 flex items-center text-xs text-green-500">
         <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
@@ -117,7 +130,7 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
   }
   
   // 初期ロード中の場合
-  if (apiStatus.loading && reconnectAttempts === 0) {
+  if (apiStatus.loading && apiStatus.reconnectAttempts === 0) {
     return (
       <div className="mb-4 p-3 rounded bg-gray-700">
         <div className="flex items-center">
@@ -144,7 +157,7 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
   
   // エラー時の詳細なヘルプ表示
   const renderDetailedHelp = () => {
-    if (!apiStatus.connected && !apiStatus.loading && reconnectAttempts > 1) {
+    if (!apiStatus.connected && !apiStatus.loading && apiStatus.reconnectAttempts > 1) {
       return (
         <div className="mt-4 p-3 bg-gray-800 rounded-md">
           <div className="flex justify-between items-center mb-2">
@@ -221,11 +234,11 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
             <li>サーバープロセスが終了した可能性があります</li>
           </ul>
           
-          {reconnectAttempts >= 5 && ( // 回数増加: 3→5
+          {apiStatus.reconnectAttempts >= 5 && (
             <div className="mt-2 p-2 border border-yellow-600 rounded text-yellow-300">
               <p className="font-medium">自動再接続に複数回失敗しました。</p>
               <p className="mt-1">アプリケーションを再起動するか、ポート設定を確認してください。</p>
-              <p className="mt-1">接続試行回数: {reconnectAttempts}</p>
+              <p className="mt-1">接続試行回数: {apiStatus.reconnectAttempts}</p>
             </div>
           )}
           

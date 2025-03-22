@@ -1,42 +1,56 @@
-// api-init.ts - 初期化ロジックを分離した新ファイル
+// api-init.ts - APIクライアントの初期化と接続管理の統合モジュール
 import { apiClient } from './client';
 import { ConnectionTestResult, HealthResponse } from './types';
-import { isClient, isElectronEnvironment, getApiInitialized, setApiInitialized, getCurrentApiPort, setCurrentApiPort } from './utils/environment';
+import { isClient, getApiInitialized, setApiInitialized, getCurrentApiPort, setCurrentApiPort } from './utils/environment';
 
 // パフォーマンス計測
 if (typeof window !== 'undefined') {
   window.performance.mark('api_init_module_init');
 }
 
-// ポート検出と接続テスト - 最適化版
+// ログレベル定義
+const LogLevel = {
+  ERROR: 0,
+  WARNING: 1,
+  INFO: 2,
+  DEBUG: 3
+};
+
+// 現在のログレベル（環境に応じて設定）
+const currentLogLevel = process.env.NODE_ENV === 'development' ? LogLevel.DEBUG : LogLevel.WARNING;
+
+// ロガー関数
+const logger = {
+  error: (message: string) => console.error(`[API] ${message}`),
+  warn: (message: string) => currentLogLevel >= LogLevel.WARNING && console.warn(`[API] ${message}`),
+  info: (message: string) => currentLogLevel >= LogLevel.INFO && console.info(`[API] ${message}`),
+  debug: (message: string) => currentLogLevel >= LogLevel.DEBUG && console.debug(`[API] ${message}`)
+};
+
+// 並列ポート検出関数
 export const detectApiPort = async (): Promise<number | null> => {
   if (!isClient) return null;
   
   // パフォーマンスマーク
   if (typeof window !== 'undefined') {
     window.performance.mark('port_detection_start');
+    logger.debug('ポート検出を開始');
   }
   
   // 1. Electron環境では環境変数やファイルからポート情報を取得
-  if (isElectronEnvironment()) {
+  if (typeof window !== 'undefined' && window.electron) {
     try {
-      if (window.electron) {
-        const apiBaseUrl = await window.electron.getApiBaseUrl();
-        if (apiBaseUrl) {
-          const urlObj = new URL(apiBaseUrl);
-          const port = parseInt(urlObj.port, 10);
-          if (!isNaN(port) && await isPortAvailable(port, 2000)) { // タイムアウト延長：1000ms→2000ms
-            // パフォーマンスマーク
-            if (typeof window !== 'undefined') {
-              window.performance.mark('port_detection_electron_success');
-              window.performance.measure('port_detection_electron', 'port_detection_start', 'port_detection_electron_success');
-            }
-            return port;
-          }
+      const apiBaseUrl = await window.electron.getApiBaseUrl();
+      if (apiBaseUrl) {
+        const urlObj = new URL(apiBaseUrl);
+        const port = parseInt(urlObj.port, 10);
+        if (!isNaN(port) && await isPortAvailable(port, 2000)) {
+          logger.info(`Electron環境からポート${port}を検出しました`);
+          return port;
         }
       }
     } catch (e) {
-      console.error('Electron APIポート検出エラー:', e);
+      logger.debug(`Electron APIポート検出試行: ${e instanceof Error ? e.message : 'Unknown error'}`);
     }
   }
   
@@ -45,93 +59,79 @@ export const detectApiPort = async (): Promise<number | null> => {
     const savedPort = localStorage.getItem('api_port');
     if (savedPort) {
       const port = parseInt(savedPort, 10);
-      if (!isNaN(port) && await isPortAvailable(port, 1500)) { // タイムアウト延長：800ms→1500ms
-        // パフォーマンスマーク
-        if (typeof window !== 'undefined') {
-          window.performance.mark('port_detection_localStorage_success');
-          window.performance.measure('port_detection_localStorage', 'port_detection_start', 'port_detection_localStorage_success');
-        }
+      if (!isNaN(port) && await isPortAvailable(port, 1500)) {
+        logger.info(`保存済みポート${port}に接続しました`);
         return port;
       }
     }
   } catch (e) {
-    console.warn('ローカルストレージからのポート取得エラー:', e);
+    logger.debug('ローカルストレージからのポート取得試行');
   }
   
   // 3. 複数の候補ポートを並列チェック
   const ports = [8000, 8080, 8888, 8081, 8001, 3001, 5000];
   
   try {
-    // 並列でポート確認
-    const portChecks = await Promise.allSettled(
-      ports.map(async port => {
-        try {
-          const isAvailable = await isPortAvailable(port, 1000); // タイムアウト延長：500ms→1000ms
-          return { port, available: isAvailable };
-        } catch (e) {
-          return { port, available: false };
-        }
-      })
-    );
+    logger.debug(`${ports.length}個のポートを並列検出中...`);
     
-    // 利用可能なポートを抽出
-    for (const result of portChecks) {
+    // ポート検査を並列実行するためのヘルパー関数
+    const checkPortPromise = async (port: number) => {
+      try {
+        const isAvailable = await isPortAvailable(port, 1000);
+        return { port, available: isAvailable };
+      } catch (e) {
+        return { port, available: false };
+      }
+    };
+    
+    // 並列でポート確認
+    const portCheckPromises = ports.map(port => checkPortPromise(port));
+    const results = await Promise.allSettled(portCheckPromises);
+    
+    // 利用可能なポートを検索
+    for (const result of results) {
       if (result.status === 'fulfilled' && result.value.available) {
         const port = result.value.port;
         try {
           localStorage.setItem('api_port', port.toString());
         } catch (e) {}
         
-        // パフォーマンスマーク - 並列検出成功
-        if (typeof window !== 'undefined') {
-          window.performance.mark('port_detection_parallel_success');
-          window.performance.measure('port_detection_parallel', 'port_detection_start', 'port_detection_parallel_success');
-        }
-        
+        logger.info(`利用可能なポート${port}を検出しました`);
         return port;
       }
     }
+    
+    logger.warn('並列ポート検出で利用可能なポートが見つかりませんでした');
   } catch (e) {
-    console.error('ポート並列検出エラー:', e);
+    logger.warn(`ポート並列検出エラー: ${e instanceof Error ? e.message : 'Unknown error'}`);
   }
   
   // 4. 順次検出を試みる（並列検出が失敗した場合のフォールバック）
+  logger.debug('順次ポート検出を試行中...');
   for (const port of ports) {
     try {
-      if (await isPortAvailable(port, 2000)) { // タイムアウト延長：500ms→2000ms
+      if (await isPortAvailable(port, 2000)) {
         try {
           localStorage.setItem('api_port', port.toString());
         } catch (e) {}
         
-        // パフォーマンスマーク - 順次検出成功
-        if (typeof window !== 'undefined') {
-          window.performance.mark('port_detection_sequential_success');
-          window.performance.measure('port_detection_sequential', 'port_detection_start', 'port_detection_sequential_success');
-        }
-        
+        logger.info(`順次検出でポート${port}を検出しました`);
         return port;
       }
     } catch (e) {
-      continue;
+      logger.debug(`ポート${port}の検証をスキップ`);
     }
   }
   
-  // パフォーマンスマーク - 失敗
-  if (typeof window !== 'undefined') {
-    window.performance.mark('port_detection_failed');
-    window.performance.measure('port_detection_failure', 'port_detection_start', 'port_detection_failed');
-  }
-  
-  console.error('使用可能なAPIポートが見つかりませんでした');
+  logger.error('利用可能なAPIポートが見つかりませんでした');
   return null;
 };
 
-// ポートが使用可能かどうかを確認 - 最適化版
-const isPortAvailable = async (port: number, timeout: number = 2000): Promise<boolean> => { // タイムアウト延長：1000ms→2000ms
+// ポートが使用可能かどうかを確認する関数（最適化版）
+const isPortAvailable = async (port: number, timeout: number = 2000): Promise<boolean> => {
   if (!isClient) return false;
   
   try {
-    // 静的なオプションオブジェクトを使用して最適化
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
     
@@ -139,20 +139,18 @@ const isPortAvailable = async (port: number, timeout: number = 2000): Promise<bo
       method: 'HEAD',
       headers: { 'Accept': 'application/json' },
       signal: controller.signal,
-      // 高速化: キャッシュを無効化
       cache: 'no-store'
     });
     
     clearTimeout(timeoutId);
     return response.status >= 200 && response.status < 300;
   } catch (e) {
-    // パフォーマンス向上のために詳細なエラーログを削除
     return false;
   }
 };
 
 // API接続テスト - 最適化版（複数回の再試行とエラー処理改善）
-export const testApiConnection = async (retryCount = 3): Promise<ConnectionTestResult> => { // リトライ回数増加：2→3
+export const testApiConnection = async (retryCount = 3): Promise<ConnectionTestResult> => {
   if (!isClient) {
     return {
       success: false,
@@ -165,23 +163,15 @@ export const testApiConnection = async (retryCount = 3): Promise<ConnectionTestR
     window.performance.mark('api_connection_test_start');
   }
   
-  // ポート検出を実行 - 並列化
+  // ポート検出を実行（このメソッドが唯一のエントリーポイント）
   const port = await detectApiPort();
   
   if (!port) {
-    // パフォーマンスマーク - 失敗
-    if (typeof window !== 'undefined') {
-      window.performance.mark('api_connection_test_port_failed');
-      window.performance.measure('api_connection_test_failure', 'api_connection_test_start', 'api_connection_test_port_failed');
-    }
-    
+    logger.error('アクティブなAPIポートが検出できませんでした');
     return {
       success: false,
       message: 'バックエンドサーバーに接続できません。サーバーが起動しているか確認してください。',
-      details: { 
-        error: 'No active API port detected',
-        attemptsMade: 1
-      }
+      details: { error: 'No active API port detected' }
     };
   }
   
@@ -192,11 +182,15 @@ export const testApiConnection = async (retryCount = 3): Promise<ConnectionTestR
     
     // 複数回再試行を実装
     let lastError = null;
+    let attemptsMade = 0;
     
     for (let attempt = 0; attempt < retryCount; attempt++) {
+      attemptsMade++;
       try {
-        // 健全性チェック - タイムアウト延長
-        const data = await apiClient.get<HealthResponse>('/health', undefined, { timeout: 3000 }); // タイムアウト延長：2000ms→3000ms
+        logger.debug(`健全性チェック試行 ${attempt + 1}/${retryCount}`);
+        
+        // 健全性チェック
+        const data = await apiClient.get<HealthResponse>('/health', undefined, { timeout: 3000 });
         
         setApiInitialized(true);
         
@@ -206,6 +200,7 @@ export const testApiConnection = async (retryCount = 3): Promise<ConnectionTestR
           window.performance.measure('api_connection_test_success_duration', 'api_connection_test_start', 'api_connection_test_success');
         }
         
+        logger.info(`APIサーバーに接続しました (ポート: ${port})`);
         return {
           success: true,
           message: `APIサーバーに接続しました (ポート: ${port})`,
@@ -217,21 +212,16 @@ export const testApiConnection = async (retryCount = 3): Promise<ConnectionTestR
         
         // 最後の試行でなければ、少し待ってから再試行
         if (attempt < retryCount - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1000)); // 待機時間：1秒
+          await new Promise(resolve => setTimeout(resolve, 1000));
         }
       }
     }
     
     // すべての再試行が失敗した場合
+    logger.warn(`${retryCount}回の健全性チェックに失敗しました`);
     
     // エラーの場合でもポートが検出できていれば部分的に成功とみなす
     setApiInitialized(true);
-    
-    // パフォーマンスマーク - 部分成功
-    if (typeof window !== 'undefined') {
-      window.performance.mark('api_connection_test_partial');
-      window.performance.measure('api_connection_test_partial_success', 'api_connection_test_start', 'api_connection_test_partial');
-    }
     
     return {
       success: true,
@@ -240,15 +230,12 @@ export const testApiConnection = async (retryCount = 3): Promise<ConnectionTestR
       details: { 
         warning: "健全性チェックに失敗しましたが、APIは検出されました",
         error: lastError?.message,
-        retries: retryCount
+        retries: retryCount,
+        attemptsMade
       }
     };
   } catch (error: any) {
-    // パフォーマンスマーク - エラー
-    if (typeof window !== 'undefined') {
-      window.performance.mark('api_connection_test_error');
-      window.performance.measure('api_connection_test_error_duration', 'api_connection_test_start', 'api_connection_test_error');
-    }
+    logger.error(`APIサーバー接続エラー: ${error.message}`);
     
     return {
       success: false,
@@ -262,7 +249,7 @@ export const testApiConnection = async (retryCount = 3): Promise<ConnectionTestR
   }
 };
 
-// APIの検出・初期化 - 最適化版（複数回再試行とエラーリカバリ）
+// APIの検出・初期化 - シングルトンパターン実装
 let apiInitializationPromise: Promise<boolean> | null = null;
 
 export const initializeApi = async (): Promise<boolean> => {
@@ -273,165 +260,51 @@ export const initializeApi = async (): Promise<boolean> => {
     window.performance.mark('api_initialization_start');
   }
   
-  if (!apiInitializationPromise) {
-    apiInitializationPromise = new Promise<boolean>(async (resolve) => {
-      try {
-        if (getApiInitialized()) {
-          // 既に初期化済みの場合はそのまま成功を返す
-          resolve(true);
-          
-          // パフォーマンスマーク - キャッシュヒット
-          if (typeof window !== 'undefined') {
-            window.performance.mark('api_initialization_cache_hit');
-            window.performance.measure('api_initialization_from_cache', 'api_initialization_start', 'api_initialization_cache_hit');
-          }
-          
-          return;
-        }
-        
-        // 複数回再試行による接続確立
-        let success = false;
-        const maxRetries = 3;
-        
-        for (let attempt = 0; attempt < maxRetries; attempt++) {
-          try {
-            const result = await testApiConnection();
-            setApiInitialized(result.success);
-            
-            if (result.success) {
-              success = true;
-              break;
-            }
-            
-            // 最後の試行でなければ、少し待ってから再試行
-            if (attempt < maxRetries - 1) {
-              await new Promise(resolve => setTimeout(resolve, 2000));
-            }
-          } catch (e) {
-            console.error(`API初期化エラー (試行 ${attempt + 1}/${maxRetries}):`, e);
-            
-            // 最後の試行でなければ続行
-            if (attempt < maxRetries - 1) {
-              await new Promise(resolve => setTimeout(resolve, 2000));
-            }
-          }
-        }
-        
-        // パフォーマンスマーク - 完了
-        if (typeof window !== 'undefined') {
-          window.performance.mark('api_initialization_complete');
-          window.performance.measure('api_initialization_duration', 'api_initialization_start', 'api_initialization_complete');
-        }
-        
-        resolve(success);
-      } catch (e) {
-        console.error('API初期化エラー:', e);
-        setApiInitialized(false);
-        
-        // パフォーマンスマーク - エラー
-        if (typeof window !== 'undefined') {
-          window.performance.mark('api_initialization_error');
-          window.performance.measure('api_initialization_error_duration', 'api_initialization_start', 'api_initialization_error');
-        }
-        
-        resolve(false);
-      }
-    });
+  // 既存の初期化処理があれば再利用（重複初期化の防止）
+  if (apiInitializationPromise) {
+    return apiInitializationPromise;
   }
+  
+  // 初期化処理の実行と結果キャッシュ
+  apiInitializationPromise = new Promise<boolean>(async (resolve) => {
+    try {
+      if (getApiInitialized()) {
+        logger.debug('APIが既に初期化済みです');
+        resolve(true);
+        return;
+      }
+      
+      // 接続試行
+      const result = await testApiConnection();
+      setApiInitialized(result.success);
+      
+      logger.info(`API初期化${result.success ? '成功' : '失敗'}: ${result.message}`);
+      resolve(result.success);
+    } catch (e) {
+      logger.error(`API初期化エラー: ${e instanceof Error ? e.message : 'Unknown error'}`);
+      setApiInitialized(false);
+      resolve(false);
+    }
+  });
   
   return apiInitializationPromise;
 };
 
-// APIポートの再検出 - 高速化のため再初期化せず、既存の状態を保持
+// APIポートの再検出 - 接続喪失時の回復機能
 export const rediscoverApiPort = async (): Promise<number | null> => {
-  // パフォーマンスマーク
-  if (typeof window !== 'undefined') {
-    window.performance.mark('api_rediscovery_start');
+  // 初期化状態をリセット
+  apiInitializationPromise = null;
+  
+  logger.info('APIポートの再検出を開始...');
+  
+  // 接続確認を実行
+  const result = await testApiConnection();
+  
+  if (result.success && result.port) {
+    return result.port;
   }
   
-  try {
-    // 複数の候補ポートを並列チェック
-    const ports = [8000, 8080, 8888, 8081, 8001, 3001, 5000];
-    
-    // 現在のポートを先頭に置くことで高速に検出できる可能性を上げる
-    const currentPort = getCurrentApiPort();
-    if (currentPort && !ports.includes(currentPort)) {
-      ports.unshift(currentPort);
-    }
-    
-    // 並列ポート検証
-    const portChecks = await Promise.allSettled(
-      ports.map(port => isPortAvailable(port, 1500)) // タイムアウト延長：800ms→1500ms
-    );
-    
-    // 利用可能なポートを検索
-    for (let i = 0; i < ports.length; i++) {
-      const check = portChecks[i];
-      if (check.status === 'fulfilled' && check.value) {
-        const port = ports[i];
-        
-        // ベースURLを更新
-        apiClient.setBaseUrl(`http://127.0.0.1:${port}/api`);
-        setCurrentApiPort(port);
-        
-        try {
-          localStorage.setItem('api_port', port.toString());
-        } catch (e) {
-          console.warn('ローカルストレージへのポート保存エラー:', e);
-        }
-        
-        // パフォーマンスマーク - 成功
-        if (typeof window !== 'undefined') {
-          window.performance.mark('api_rediscovery_success');
-          window.performance.measure('api_rediscovery_duration', 'api_rediscovery_start', 'api_rediscovery_success');
-        }
-        
-        console.log(`APIポートを再検出しました: ${port}`);
-        return port;
-      }
-    }
-    
-    // 並列検出が失敗した場合は順次検証を試みる
-    for (const port of ports) {
-      if (await isPortAvailable(port, 2000)) { // タイムアウト延長：800ms→2000ms
-        // ベースURLを更新
-        apiClient.setBaseUrl(`http://127.0.0.1:${port}/api`);
-        setCurrentApiPort(port);
-        
-        try {
-          localStorage.setItem('api_port', port.toString());
-        } catch (e) {}
-        
-        // パフォーマンスマーク - 順次検出成功
-        if (typeof window !== 'undefined') {
-          window.performance.mark('api_rediscovery_sequential_success');
-          window.performance.measure('api_rediscovery_sequential', 'api_rediscovery_start', 'api_rediscovery_sequential_success');
-        }
-        
-        console.log(`APIポートを順次検出で再検出しました: ${port}`);
-        return port;
-      }
-    }
-    
-    // パフォーマンスマーク - 失敗
-    if (typeof window !== 'undefined') {
-      window.performance.mark('api_rediscovery_failed');
-      window.performance.measure('api_rediscovery_failure', 'api_rediscovery_start', 'api_rediscovery_failed');
-    }
-    
-    console.error('APIポートの再検出に失敗しました');
-    return null;
-  } catch (e) {
-    console.error('APIポート再検出エラー:', e);
-    
-    // パフォーマンスマーク - エラー
-    if (typeof window !== 'undefined') {
-      window.performance.mark('api_rediscovery_error');
-      window.performance.measure('api_rediscovery_error_duration', 'api_rediscovery_start', 'api_rediscovery_error');
-    }
-    
-    return null;
-  }
+  return null;
 };
 
 // パフォーマンスマーク - 初期化完了

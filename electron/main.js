@@ -33,17 +33,15 @@ const performanceMetrics = {
 
 // パフォーマンスステージの記録
 function recordPerformanceStage(stageName) {
+  /*パフォーマンスステージを記録*/
   performanceMetrics.stages.push({
     name: stageName,
     time: Date.now() - performanceMetrics.appStartTime
   });
   
-  if (stageName === 'app_ready') {
-    // 初期段階のパフォーマンスをログ出力
-    console.log('=== 起動パフォーマンス（初期段階） ===');
-    performanceMetrics.stages.forEach(stage => {
-      console.log(`${stage.name}: ${stage.time}ms`);
-    });
+  // 最適化モードのみログ出力
+  if (os.environ && os.environ.get && os.environ.get('FASTAPI_STARTUP_OPTIMIZE') == '1') {
+    console.log(`PERF: ${stageName} - ${(Date.now() - performanceMetrics.appStartTime) / 1000}s`);
   }
 }
 
@@ -692,12 +690,36 @@ function createWindow() {
   mainWindow.webContents.on('did-finish-load', () => {
     recordPerformanceStage('renderer_loaded');
     
-    // 修正: 明示的にグローバル変数を設定
-    mainWindow.webContents.executeJavaScript(
-      `window.electronReady = true;
-      document.dispatchEvent(new Event('electron-ready'));
-      window.performance.mark('renderer_ready');`
-    );
+    // 修正: より確実にグローバル変数を設定
+    mainWindow.webContents.executeJavaScript(`
+      try {
+        // グローバル変数の設定
+        window.electronReady = true;
+        window.electronInitTime = ${Date.now()};
+        
+        // メタタグを追加
+        if (!document.querySelector('meta[name="electron-ready"]')) {
+          const meta = document.createElement('meta');
+          meta.name = 'electron-ready';
+          meta.content = 'true';
+          document.head.appendChild(meta);
+        }
+        
+        // イベント発行
+        document.dispatchEvent(new Event('electron-ready'));
+        
+        // パフォーマンスマーク
+        if (window.performance && window.performance.mark) {
+          window.performance.mark('renderer_ready');
+        }
+        
+        console.log('Electron環境変数が正常に設定されました (main.js)');
+      } catch (e) {
+        console.error('Electron環境変数の設定中にエラーが発生しました:', e);
+      }
+    `).catch(err => {
+      console.error('コード実行エラー:', err);
+    });
   });
 
   // 開発ツールを開く（開発環境のみ）

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { isElectronEnvironment } from '../lib/utils/environment';
+import { onElectronReady } from '../lib/utils/electron-utils';
 
 /**
  * クライアント側でのみ実行される情報表示コンポーネント
@@ -12,51 +13,47 @@ const ClientInfo: React.FC = () => {
     isElectron: false,
     apiPort: undefined as number | undefined,
     apiBaseUrl: '',
-    electronProps: [] as string[]
+    electronProps: [] as string[],
+    readyState: ''
   });
   
-  const [retryCount, setRetryCount] = useState(0);
-  
-  // マウント後にクライアント環境情報を取得（遅延検出ロジック追加）
+  // マウント後にクライアント環境情報を取得（統一版）
   useEffect(() => {
-    // 即時実行の初期チェック
-    checkElectronEnvironment();
-    
-    // 念のため少し遅延させて再チェック（タイミング問題対策）
-    const delayedCheck = setTimeout(() => {
-      if (!electronInfo.isElectron && retryCount < 3) {
-        console.log(`Electron環境検出: 再試行 ${retryCount + 1}/3`);
-        checkElectronEnvironment();
-        setRetryCount(prev => prev + 1);
-      }
-    }, 1000); // 1秒後に再チェック
-    
-    return () => clearTimeout(delayedCheck);
-  }, [retryCount]);
-  
-  // Electron環境検出ロジック
-  const checkElectronEnvironment = () => {
-    const isElectron = isElectronEnvironment();
-    console.log('ClientInfo: Electron環境検出結果:', isElectron);
-    
-    if (isElectron || window.electron) {
-      // Electron環境が検出された場合
+    // 環境検出ロジックの実行と結果のログ出力
+    const detectElectron = () => {
+      // 統一された環境検出ロジックを使用
+      const isElectron = isElectronEnvironment();
+      
+      console.log('ClientInfo: Electron環境検出結果:', {
+        isElectron,
+        electronReady: window.electronReady,
+        currentApiPort: window.currentApiPort,
+        hasMeta: !!document.querySelector('meta[name="electron-ready"]'),
+        readyState: document.readyState
+      });
+      
+      // 更新された環境情報を設定
       setElectronInfo({
-        isElectron: true,
+        isElectron: isElectron,
         apiPort: window.currentApiPort,
         apiBaseUrl: window.electron?.env?.apiUrl || '',
-        electronProps: Object.keys(window.electron || {})
+        electronProps: Object.keys(window.electron || {}),
+        readyState: document.readyState
       });
-    } else {
-      // 検出されなかった場合でも情報を更新
-      setElectronInfo({
-        isElectron: false,
-        apiPort: window.currentApiPort,
-        apiBaseUrl: '',
-        electronProps: []
-      });
-    }
-  };
+    };
+    
+    // 即時実行
+    detectElectron();
+    
+    // Electron Ready イベントを監視
+    const cleanup = onElectronReady(() => {
+      console.log('ClientInfo: electron-ready イベントを検出');
+      detectElectron();
+    });
+    
+    // コンポーネントのアンマウント時にクリーンアップ
+    return cleanup;
+  }, []);
 
   // 開発環境でのみ表示するデバッグ情報
   if (process.env.NODE_ENV !== 'development') {
@@ -71,6 +68,8 @@ const ClientInfo: React.FC = () => {
           <p><span className="text-gray-300">環境: </span>{process.env.NODE_ENV}</p>
           <p><span className="text-gray-300">Electron環境: </span>
              {electronInfo.isElectron ? 'はい' : 'いいえ'}</p>
+          <p><span className="text-gray-300">DOMの状態: </span>
+             {electronInfo.readyState}</p>
           <p><span className="text-gray-300">API ポート: </span>
              {electronInfo.apiPort || 'なし'}</p>
           <p><span className="text-gray-300">API Base URL: </span>
