@@ -2,8 +2,9 @@
 
 import React, { useState } from 'react';
 import { usePathname } from 'next/navigation';
-import { getDefaultPath } from '@/app/lib/api';
+import { getDefaultPath } from '@/app/lib/services';
 import { useNotification } from '@/app/contexts/NotificationContext';
+import FileSelector from './FileSelector';
 
 interface HeaderProps {
   updateTime: string;
@@ -23,24 +24,9 @@ const Header: React.FC<HeaderProps> = ({
   const [isSelectingFile, setIsSelectingFile] = useState(false);
 
   // ファイル選択ハンドラー
-  // Note: 実際のWeb環境ではFileSystemAccessAPIかElectron/Tauriなどを使用します
-  const handleSelectFile = async () => {
-    setIsSelectingFile(true);
-    try {
-      // 実環境ではファイル選択ダイアログを表示しますが
-      // ここではデフォルトパスを取得するAPIを呼び出します
-      const response = await getDefaultPath();
-      if (response.success && response.path) {
-        onSelectFile(response.path);
-        addNotification(`ファイルを選択しました: ${response.path}`, 'success');
-      } else {
-        addNotification(response.message || 'ファイルの選択に失敗しました', 'error');
-      }
-    } catch (error) {
-      addNotification('ファイルの選択中にエラーが発生しました', 'error');
-    } finally {
-      setIsSelectingFile(false);
-    }
+  const handleSelectFile = (path: string) => {
+    console.log('Header: handleSelectFile が呼び出されました', { path });
+    onSelectFile(path);
   };
 
   return (
@@ -52,29 +38,17 @@ const Header: React.FC<HeaderProps> = ({
         </div>
         
         <div className="flex items-center">
-          {/* ファイル表示 */}
-          {selectedFilePath && (
-            <div className="text-text-secondary text-xs mr-2 max-w-xs truncate">
-              現在のファイル: {selectedFilePath}
-            </div>
-          )}
+          <FileSelector 
+            onSelectFile={handleSelectFile} 
+            selectedFilePath={selectedFilePath}
+          />
           
-          {/* ボタングループ */}
-          <div className="flex">
-            <button
-              onClick={handleSelectFile}
-              disabled={isSelectingFile}
-              className="bg-transparent text-text-accent px-2.5 py-1.5 rounded border border-text-accent text-xs mr-2 hover:bg-text-accent hover:text-surface transition-colors"
-            >
-              参照
-            </button>
-            <button
-              onClick={onRefresh}
-              className="bg-text-accent text-surface px-2.5 py-1.5 rounded text-xs hover:bg-opacity-80 transition-colors"
-            >
-              更新
-            </button>
-          </div>
+          <button
+            onClick={onRefresh}
+            className="bg-text-accent text-surface px-2.5 py-1.5 rounded text-xs hover:bg-opacity-80 transition-colors ml-2"
+          >
+            更新
+          </button>
         </div>
       </div>
     </header>

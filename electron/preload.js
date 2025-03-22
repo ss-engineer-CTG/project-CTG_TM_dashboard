@@ -1,141 +1,147 @@
 const { contextBridge, ipcRenderer } = require('electron');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
 
-// アプリケーションからアクセスできるAPIを提供
+// 詳細なデバッグログを追加
+console.log('Electron preload script starting...');
+
+// 安全なIPCチャンネルリスト
+const validChannels = [
+  'api-connection-established',
+  'api-server-down',
+  'api-server-restarted'
+];
+
+// Electron APIの初期化完了イベントの発行
+document.addEventListener('DOMContentLoaded', () => {
+  console.log('DOM content loaded, triggering electron-ready event');
+  document.dispatchEvent(new Event('electron-ready'));
+});
+
+// メインプロセスとレンダラープロセス間の安全な通信を提供
 contextBridge.exposeInMainWorld('electron', {
   // アプリケーションパスを取得
-  getAppPath: () => ipcRenderer.invoke('get-app-path'),
+  getAppPath: () => {
+    console.log('Calling getAppPath via IPC');
+    return ipcRenderer.invoke('get-app-path');
+  },
   
   // APIベースURLを取得
-  getApiBaseUrl: () => ipcRenderer.invoke('get-api-base-url'),
+  getApiBaseUrl: () => {
+    console.log('Calling getApiBaseUrl via IPC');
+    return ipcRenderer.invoke('get-api-base-url');
+  },
   
   // 一時ディレクトリのパスを取得
-  getTempPath: () => os.tmpdir(),
+  getTempPath: () => {
+    console.log('Calling getTempPath via IPC');
+    return ipcRenderer.invoke('get-temp-path');
+  },
   
-  // アプリ環境情報
-  env: {
-    isElectron: true,
-    // 動的にAPIURLを設定するようにする
-    get apiUrl() {
-      // IPC経由で最新のURLを取得
-      return ipcRenderer.invoke('get-api-base-url');
+  // ファイルシステム操作
+  fs: {
+    exists: (path) => {
+      console.log('Calling fs:exists via IPC', { path });
+      return ipcRenderer.invoke('fs:exists', path);
+    },
+    readFile: (path, options) => {
+      console.log('Calling fs:readFile via IPC', { path, options });
+      return ipcRenderer.invoke('fs:readFile', path, options);
+    },
+    writeFile: (filePath, data, options) => {
+      console.log('Calling fs:writeFile via IPC', { filePath, options });
+      return ipcRenderer.invoke('fs:writeFile', filePath, data, options);
+    },
+    mkdir: (dirPath, options) => {
+      console.log('Calling fs:mkdir via IPC', { dirPath, options });
+      return ipcRenderer.invoke('fs:mkdir', dirPath, options);
+    },
+    readdir: (dirPath, options) => {
+      console.log('Calling fs:readdir via IPC', { dirPath, options });
+      return ipcRenderer.invoke('fs:readdir', dirPath, options);
     }
   },
   
-  // IPC通信
+  // パス操作
+  path: {
+    join: (...args) => {
+      console.log('Calling path:join via IPC', { args });
+      return ipcRenderer.invoke('path:join', ...args);
+    },
+    dirname: (filePath) => {
+      console.log('Calling path:dirname via IPC', { filePath });
+      return ipcRenderer.invoke('path:dirname', filePath);
+    },
+    basename: (filePath) => {
+      console.log('Calling path:basename via IPC', { filePath });
+      return ipcRenderer.invoke('path:basename', filePath);
+    }
+  },
+  
+  // ダイアログ操作 - 強化バージョン
+  dialog: {
+    openCSVFile: (defaultPath) => {
+      console.log('Calling dialog:openCSVFile via IPC', { defaultPath });
+      return ipcRenderer.invoke('dialog:openCSVFile', defaultPath)
+        .catch(err => {
+          console.error('dialog:openCSVFile IPC error:', err);
+          // エラーが発生した場合でも結果オブジェクトを返す
+          return {
+            success: false,
+            message: `IPCエラー: ${err.message || 'Unknown error'}`,
+            path: null
+          };
+        });
+    }
+  },
+  
+  // テスト用のダイアログ関数
+  testDialog: () => {
+    console.log('Calling dialog:test via IPC');
+    return ipcRenderer.invoke('dialog:test')
+      .catch(err => {
+        console.error('dialog:test IPC error:', err);
+        return {
+          success: false,
+          error: err.message || 'Unknown error'
+        };
+      });
+  },
+  
+  // 環境変数
+  env: {
+    isElectron: true,
+    apiUrl: process.env.API_URL || null
+  },
+  
+  // IPCレンダラー - イベントリスナー
   ipcRenderer: {
-    // イベントリスナーの登録
     on: (channel, callback) => {
-      const validChannels = [
-        'api-connection-established',
-        'api-server-down'
-      ];
       if (validChannels.includes(channel)) {
         const subscription = (_event, ...args) => callback(...args);
         ipcRenderer.on(channel, subscription);
-        
         return () => {
           ipcRenderer.removeListener(channel, subscription);
         };
-      }
-    },
-    
-    // イベントリスナーの削除
-    removeListener: (channel, callback) => {
-      const validChannels = [
-        'api-connection-established',
-        'api-server-down'
-      ];
-      if (validChannels.includes(channel)) {
-        ipcRenderer.removeListener(channel, callback);
+      } else {
+        console.warn(`Channel "${channel}" is not authorized for IPC communication`);
+        return () => {};
       }
     }
-  },
-  
-  // ファイルシステム機能
-  fs: {
-    // ファイルを読み込む
-    readFile: async (filePath, options) => {
-      try {
-        return await fs.promises.readFile(filePath, options);
-      } catch (error) {
-        console.error(`ファイル読み込みエラー: ${filePath}`, error);
-        if (error.code === 'EPERM') {
-          throw new Error('ファイルへのアクセス権限がありません。管理者権限で実行するか、別のファイルを選択してください。');
-        }
-        throw error;
-      }
-    },
-    
-    // ファイルを書き込む
-    writeFile: async (filePath, data, options) => {
-      try {
-        return await fs.promises.writeFile(filePath, data, options);
-      } catch (error) {
-        console.error(`ファイル書き込みエラー: ${filePath}`, error);
-        if (error.code === 'EPERM') {
-          throw new Error('ファイルへの書き込み権限がありません。管理者権限で実行するか、別のフォルダを選択してください。');
-        }
-        throw error;
-      }
-    },
-    
-    // ディレクトリを作成
-    mkdir: async (dirPath, options) => {
-      try {
-        return await fs.promises.mkdir(dirPath, { recursive: true, ...options });
-      } catch (error) {
-        console.error(`ディレクトリ作成エラー: ${dirPath}`, error);
-        if (error.code === 'EPERM') {
-          throw new Error('ディレクトリの作成権限がありません。管理者権限で実行するか、別のフォルダを選択してください。');
-        }
-        throw error;
-      }
-    },
-    
-    // ファイルの存在確認
-    exists: (pathToCheck) => {
-      try {
-        return fs.existsSync(pathToCheck);
-      } catch (error) {
-        console.error(`ファイル存在確認エラー: ${pathToCheck}`, error);
-        return false;
-      }
-    },
-    
-    // ディレクトリの内容を取得
-    readdir: async (dirPath, options) => {
-      try {
-        return await fs.promises.readdir(dirPath, options);
-      } catch (error) {
-        console.error(`ディレクトリ読み込みエラー: ${dirPath}`, error);
-        if (error.code === 'EPERM') {
-          throw new Error('ディレクトリへのアクセス権限がありません。管理者権限で実行するか、別のフォルダを選択してください。');
-        }
-        throw error;
-      }
-    }
-  },
-  
-  // パスユーティリティ
-  path: {
-    join: (...args) => path.join(...args),
-    dirname: (filePath) => path.dirname(filePath),
-    basename: (filePath) => path.basename(filePath)
-  },
-  
-  // OSユーティリティ
-  os: {
-    tmpdir: () => os.tmpdir(),
-    homedir: () => os.homedir(),
-    platform: () => process.platform
-  },
-  
-  // ファイル選択ダイアログを追加
-  dialog: {
-    // CSVファイル選択ダイアログを表示
-    openCSVFile: (defaultPath) => ipcRenderer.invoke('dialog:openCSVFile', defaultPath),
   }
 });
+
+// 公開済みの機能を一覧表示
+const exposedAPIs = {
+  appPath: typeof ipcRenderer.invoke === 'function',
+  apiBaseUrl: typeof ipcRenderer.invoke === 'function',
+  tempPath: typeof ipcRenderer.invoke === 'function',
+  fs: true,
+  path: true,
+  dialog: true,
+  testDialog: true,
+  env: true,
+  ipcRenderer: true
+};
+
+// 準備完了ログ
+console.log('Electron preload script loaded successfully');
+console.log('Exposed APIs:', exposedAPIs);

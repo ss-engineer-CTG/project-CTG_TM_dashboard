@@ -3,7 +3,7 @@
 import React from 'react';
 import { useQuery } from 'react-query';
 import { RecentTasks } from '@/app/lib/types';
-import { getRecentTasks } from '@/app/lib/api';
+import { getRecentTasks } from '@/app/lib/services';
 
 interface RecentTasksInfoProps {
   projectId: string;

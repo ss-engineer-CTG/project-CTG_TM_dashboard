@@ -1,10 +1,13 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
+import { ApiProvider } from './contexts/ApiContext';
+import { NotificationProvider } from './contexts/NotificationContext';
+import Notification from './components/Notification';
+import ErrorBoundary from './components/ErrorBoundary';
 
 export function Providers({ children }: { children: React.ReactNode }) {
-  // QueryClientをメモ化して再レンダリング時に再作成されないようにする
   const [queryClient] = React.useState(() => new QueryClient({
     defaultOptions: {
       queries: {
@@ -14,9 +17,26 @@ export function Providers({ children }: { children: React.ReactNode }) {
     },
   }));
 
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
+  if (!isMounted) {
+    return <div>Loading...</div>;
+  }
+
   return (
     <QueryClientProvider client={queryClient}>
-      {children}
+      <NotificationProvider>
+        <ErrorBoundary>
+          <ApiProvider>
+            {children}
+          </ApiProvider>
+        </ErrorBoundary>
+        <Notification />
+      </NotificationProvider>
     </QueryClientProvider>
   );
 }

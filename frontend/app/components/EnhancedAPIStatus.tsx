@@ -2,29 +2,28 @@
 
 import React, { useState, useEffect } from 'react';
 import { APIConnectionStatus } from '@/app/lib/types';
-
-// クライアントサイドのみの処理を判定するヘルパー関数
-const isClient = typeof window !== 'undefined';
+import { useApi } from '@/app/contexts/ApiContext';
+import { isClient } from '@/app/lib/utils/environment';
 
 interface EnhancedAPIStatusProps {
-  status: APIConnectionStatus;
   onRetry: () => void;
-  reconnectAttempts: number;
 }
 
-const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ 
-  status, 
-  onRetry, 
-  reconnectAttempts 
-}) => {
+const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [countdown, setCountdown] = useState(0);
+  
+  // APIコンテキストから状態を取得
+  const { status, reconnectAttempts, checkConnection } = useApi();
   
   // 自動再接続のカウントダウン - クライアントサイドでのみ実行
   useEffect(() => {
     // サーバーサイドレンダリング時は何もしない
     if (!isClient) return;
 
+    // コンポーネントのマウント状態を追跡するフラグ
+    let isMounted = true;
+    
     if (status.connected || !status.message.includes('接続できません')) {
       return;
     }
@@ -35,6 +34,8 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({
       setCountdown(autoRetryTime);
       
       const timer = setInterval(() => {
+        if (!isMounted) return;
+        
         setCountdown(prev => {
           if (prev <= 1) {
             clearInterval(timer);
@@ -45,8 +46,15 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({
         });
       }, 1000);
       
-      return () => clearInterval(timer);
+      return () => {
+        clearInterval(timer);
+        isMounted = false;
+      };
     }
+    
+    return () => {
+      isMounted = false;
+    };
   }, [status.connected, status.message, reconnectAttempts]);
   
   // 再接続ハンドラー
@@ -55,7 +63,8 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({
     
     setIsReconnecting(true);
     try {
-      await onRetry();
+      await checkConnection();
+      onRetry();
     } finally {
       setIsReconnecting(false);
     }
