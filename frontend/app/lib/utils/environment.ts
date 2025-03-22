@@ -13,10 +13,20 @@ export const isClient = typeof window !== 'undefined';
 export const isElectronEnvironment = (): boolean => {
   if (!isClient) return false;
   
-  // window.electron が存在し、有効なオブジェクトであるかを確認
-  return !!window.electron && 
-         typeof window.electron === 'object' &&
-         !!Object.keys(window.electron).length;
+  const result = isClient && 
+         typeof window !== 'undefined' && 
+         typeof window.electron !== 'undefined' && 
+         window.electron !== null;
+         
+  // デバッグログ追加
+  console.log('isElectronEnvironment 検出結果:', result, {
+    isClient,
+    windowDefined: typeof window !== 'undefined',
+    electronDefined: typeof window !== 'undefined' && typeof window.electron !== 'undefined',
+    electronProperties: typeof window !== 'undefined' && window.electron ? Object.keys(window.electron) : []
+  });
+  
+  return result;
 };
 
 /**

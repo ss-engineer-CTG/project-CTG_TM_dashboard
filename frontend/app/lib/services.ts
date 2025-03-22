@@ -124,77 +124,12 @@ export const openFile = async (path: string): Promise<FileResponse> => {
   });
 };
 
-// ブラウザのファイル入力要素を使った選択
-const selectFileUsingBrowser = (): Promise<FileResponse> => {
-  if (!isClient) {
-    return Promise.resolve({
-      success: false,
-      message: 'ブラウザ環境でのみ使用可能です',
-      path: null
-    });
-  }
-
-  return new Promise((resolve) => {
-    // 一時的なファイル入力要素を作成
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.csv';
-    input.style.display = 'none';
-    document.body.appendChild(input);
-
-    // ファイル選択イベント
-    input.onchange = (event) => {
-      const files = (event.target as HTMLInputElement).files;
-      
-      // 要素を削除
-      document.body.removeChild(input);
-      
-      if (files && files.length > 0) {
-        // FileオブジェクトからURLを作成（表示用）
-        const file = files[0];
-        const fileName = file.name;
-        
-        // 開発環境ではファイルのパスは取得できないが、名前は取得可能
-        resolve({
-          success: true,
-          message: `ファイルを選択しました: ${fileName}`,
-          path: fileName // 本来はパスだが、開発環境ではファイル名のみ
-        });
-      } else {
-        resolve({
-          success: false,
-          message: 'ファイルが選択されませんでした',
-          path: null
-        });
-      }
-    };
-
-    // 古いブラウザで使うキャンセル処理
-    const handleWindowClick = () => {
-      // ある程度の遅延後にまだ要素が存在するかチェック
-      setTimeout(() => {
-        if (document.body.contains(input)) {
-          document.body.removeChild(input);
-          window.removeEventListener('click', handleWindowClick);
-          resolve({
-            success: false,
-            message: 'ファイル選択がキャンセルされました',
-            path: null
-          });
-        }
-      }, 500);
-    };
-    
-    window.addEventListener('click', handleWindowClick, { once: true });
-
-    // クリックイベントをトリガー
-    input.click();
-  });
-};
-
 // ファイル選択ダイアログを表示する
 export const selectFile = async (initialPath?: string): Promise<FileResponse> => {
+  console.log('selectFile: 関数が呼び出されました', { initialPath });
+
   if (!isClient) {
+    console.log('selectFile: クライアントサイドではありません');
     return {
       success: false,
       message: 'クライアント側でのみ使用可能な機能です',
@@ -203,44 +138,54 @@ export const selectFile = async (initialPath?: string): Promise<FileResponse> =>
   }
   
   try {
-    // 実際のAPI URLを非同期で取得
-    const apiUrl = apiClient.getBaseUrl();
-    console.log('[API] ファイル選択ダイアログ表示リクエスト開始', { 
-      initialPath: initialPath || 'なし',
-      apiUrl: apiUrl
-    });
+    console.log('selectFile: 環境を検証します');
     
-    // 開発環境かどうかをチェック
-    if (process.env.NODE_ENV === 'development') {
-      console.log('[API] 開発環境を検出、ブラウザのファイル選択を使用します');
-      return await selectFileUsingBrowser();
-    }
+    // 環境変数検証
+    const env = {
+      isClient: isClient,
+      isElectron: isElectronEnvironment(),
+      hasElectronObj: typeof window.electron !== 'undefined',
+      hasDialogObj: typeof window.electron?.dialog !== 'undefined',
+      hasOpenCSVMethod: typeof window.electron?.dialog?.openCSVFile === 'function',
+      nodeEnv: process.env.NODE_ENV
+    };
+    
+    console.log('selectFile: 環境変数:', env);
+    
+    // 実際にどの選択経路を使用するかをログ出力
+    let selectedPath = 'unknown';
     
     // Electron環境かどうかをチェック
-    if (isElectronEnvironment() && window.electron?.dialog) {
-      console.log('[API] Electron環境を検出、Electronダイアログを使用します');
-      return await window.electron.dialog.openCSVFile(initialPath || '');
-    }
-    
-    // それ以外の場合はAPIを使用
-    return withApiInitialized(async () => {
-      console.log('[API] APIベースのファイル選択を使用します');
-      const data = await apiClient.get<FileResponse>('/files/select', { 
-        initial_path: initialPath 
-      });
+    if (env.isElectron && env.hasOpenCSVMethod) {
+      selectedPath = 'electron';
+      console.log('selectFile: Electron対応ファイル選択を使用します');
+      try {
+        // Electron経由でファイル選択
+        console.log('selectFile: window.electron.dialog.openCSVFile を呼び出します');
+        const result = await window.electron.dialog.openCSVFile(initialPath || '');
+        console.log('selectFile: Electron選択結果:', result);
+        return result;
+      } catch (dialogError) {
+        console.error('selectFile: Electronダイアログエラー:', dialogError);
+        throw dialogError;
+      }
+    } else {
+      selectedPath = 'api';
+      console.log('selectFile: APIベースのファイル選択を使用します');
       
-      return data;
-    });
-  } catch (error: any) {
-    console.error('[API] ファイル選択リクエストエラー:', error);
-    
-    // エラー発生時はブラウザのファイル選択にフォールバック
-    if (isClient) {
-      console.log('[API] エラー発生、ブラウザのファイル選択を使用します');
-      return await selectFileUsingBrowser();
+      // API経由でファイル選択
+      return await withApiInitialized(async () => {
+        console.log('selectFile: APIリクエスト開始: /files/select');
+        const data = await apiClient.get<FileResponse>('/files/select', { 
+          initial_path: initialPath 
+        });
+        console.log('selectFile: API選択結果:', data);
+        return data;
+      });
     }
+  } catch (error: any) {
+    console.error('selectFile: エラー発生:', error);
     
-    // フォールバックもできない場合はエラーレスポンスを返す
     return {
       success: false,
       message: error.isApiError
@@ -249,46 +194,6 @@ export const selectFile = async (initialPath?: string): Promise<FileResponse> =>
       path: null
     };
   }
-};
-
-// ファイルアップロード
-export const uploadCSVFile = async (file: File): Promise<FileResponse> => {
-  if (!isClient) {
-    return {
-      success: false,
-      message: 'クライアント側でのみ使用可能な機能です',
-      path: null
-    };
-  }
-  
-  return withApiInitialized(async () => {
-    try {
-      console.log('[API] CSVファイルアップロード開始');
-      
-      // FormDataを作成
-      const formData = new FormData();
-      formData.append('file', file);
-      
-      // ファイルのアップロード
-      const response = await fetch(`${apiClient.getBaseUrl()}/files/upload`, {
-        method: 'POST',
-        body: formData
-      });
-      
-      const data = await response.json();
-      console.log('[API] ファイルアップロード成功:', data);
-      return data;
-    } catch (error: any) {
-      console.error('[API] ファイルアップロードエラー:', error);
-      return {
-        success: false,
-        message: error.isApiError
-          ? `ファイルアップロードエラー: ${error.details}`
-          : `ファイルアップロード中に予期しないエラーが発生しました: ${error.message}`,
-        path: null
-      };
-    }
-  });
 };
 
 // API健全性チェック
@@ -321,6 +226,36 @@ export const requestShutdown = async (): Promise<ShutdownResponse> => {
   });
 };
 
-// index.ts ファイルでエクスポートを集約
+// API接続テスト
+export const testApiConnection = async (): Promise<{success: boolean; message: string; details?: any}> => {
+  if (!isClient) {
+    return {
+      success: false,
+      message: 'クライアント側でのみ実行可能な機能です'
+    };
+  }
+  
+  try {
+    console.log('API接続テスト実行中...');
+    const response = await healthCheck();
+    
+    return {
+      success: true,
+      message: `APIサーバーに接続しました: ${response.status || 'OK'}`,
+      details: response
+    };
+  } catch (error: any) {
+    console.error('API接続テスト失敗:', error);
+    
+    return {
+      success: false,
+      message: error.isApiError
+        ? `接続エラー: ${error.details}`
+        : `API接続テスト中に予期しないエラーが発生しました: ${error.message}`,
+      details: error
+    };
+  }
+};
+
 export * from './client';
 export * from './connection';

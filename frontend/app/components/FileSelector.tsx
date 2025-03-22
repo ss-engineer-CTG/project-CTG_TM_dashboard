@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
-import { selectFile, uploadCSVFile } from '@/app/lib/services';
+import React, { useState, useEffect } from 'react';
+import { selectFile } from '@/app/lib/services';
 import { useNotification } from '@/app/contexts/NotificationContext';
 import { isElectronEnvironment } from '@/app/lib/utils/environment';
 
@@ -13,62 +13,50 @@ interface FileSelectorProps {
 const FileSelector: React.FC<FileSelectorProps> = ({ onSelectFile, selectedFilePath }) => {
   const { addNotification } = useNotification();
   const [isSelectingFile, setIsSelectingFile] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isElectron, setIsElectron] = useState(false);
+
+  // Electron環境を検出して状態を更新
+  useEffect(() => {
+    const electronCheck = isElectronEnvironment();
+    setIsElectron(electronCheck);
+    console.log('FileSelector: Electron環境の検出結果:', electronCheck, {
+      windowElectron: window.electron ? '存在します' : '存在しません',
+      windowElectronDialog: window.electron?.dialog ? '存在します' : '存在しません'
+    });
+  }, []);
 
   // ファイル参照ボタン処理
   const handleSelectFile = async () => {
+    console.log('FileSelector: handleSelectFile が呼び出されました');
     setIsSelectingFile(true);
     
     try {
+      console.log('FileSelector: selectFile を呼び出します...');
       const response = await selectFile(selectedFilePath || undefined);
+      console.log('FileSelector: selectFile の結果:', response);
       
       if (response.success && response.path) {
+        console.log('FileSelector: ファイル選択成功:', response.path);
         onSelectFile(response.path);
         addNotification(`ファイルを選択しました: ${response.path}`, 'success');
       } else {
-        // ファイル選択がキャンセルされた場合やエラーが発生した場合
+        console.log('FileSelector: ファイル選択失敗または中断:', response.message);
         if (response.message) {
           addNotification(response.message, 'error');
         }
       }
     } catch (error: any) {
-      console.error('ファイル選択エラー:', error);
+      console.error('FileSelector: ファイル選択エラー:', error);
       addNotification('ファイルの選択中にエラーが発生しました', 'error');
     } finally {
-      setIsSelectingFile(false);
-    }
-  };
-
-  // ファイルアップロード処理（開発環境用）
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (!files || files.length === 0) return;
-    
-    setIsSelectingFile(true);
-    
-    try {
-      const file = files[0];
-      // 開発環境の場合はファイルをアップロード
-      const response = await uploadCSVFile(file);
-      
-      if (response.success && response.path) {
-        onSelectFile(response.path);
-        addNotification(`ファイルをアップロードしました: ${file.name}`, 'success');
-      } else {
-        addNotification(response.message || 'ファイルのアップロードに失敗しました', 'error');
-      }
-    } catch (error: any) {
-      console.error('ファイルアップロードエラー:', error);
-      addNotification('ファイルのアップロード中にエラーが発生しました', 'error');
-    } finally {
-      // 次回同じファイルを選択できるようにリセット
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      console.log('FileSelector: handleSelectFile 完了');
       setIsSelectingFile(false);
     }
   };
 
   // 手動入力処理
   const handleManualInput = () => {
+    console.log('FileSelector: handleManualInput が呼び出されました');
     const path = prompt("CSVファイルの完全パスを入力してください:", selectedFilePath || "");
     if (path) {
       onSelectFile(path);
@@ -78,15 +66,20 @@ const FileSelector: React.FC<FileSelectorProps> = ({ onSelectFile, selectedFileP
 
   // Electronダイアログのテスト用関数
   const testElectronDialog = async () => {
+    console.log('FileSelector: testElectronDialog が呼び出されました');
+    
     if (isElectronEnvironment() && window.electron?.testDialog) {
       try {
+        console.log('FileSelector: Electron testDialog を実行...');
         const result = await window.electron.testDialog();
+        console.log('FileSelector: testDialog 結果:', result);
         addNotification('ダイアログテスト: ' + (result.success ? '成功' : '失敗'), result.success ? 'success' : 'error');
       } catch (error) {
-        console.error('ダイアログテストエラー:', error);
+        console.error('FileSelector: ダイアログテストエラー:', error);
         addNotification('ダイアログテストエラー', 'error');
       }
     } else {
+      console.log('FileSelector: Electron環境が検出されませんでした');
       addNotification('Electron環境が検出されませんでした', 'error');
     }
   };
@@ -106,39 +99,18 @@ const FileSelector: React.FC<FileSelectorProps> = ({ onSelectFile, selectedFileP
           onClick={handleSelectFile}
           disabled={isSelectingFile}
           className="bg-transparent text-text-accent px-2.5 py-1.5 rounded border border-text-accent text-xs hover:bg-text-accent hover:text-surface transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          data-testid="file-select-button"
         >
-          {isSelectingFile ? '選択中...' : '参照'}
+          {isSelectingFile ? '選択中...' : '参照'} {isElectron ? '(E)' : '(A)'}
         </button>
         
-        {/* Electron診断ボタン - 診断モードでのみ表示 */}
-        {process.env.NODE_ENV !== 'production' && (
-          <button
-            onClick={testElectronDialog}
-            className="bg-transparent text-purple-400 px-2.5 py-1.5 rounded border border-purple-400 text-xs hover:bg-purple-400 hover:text-surface transition-colors"
-          >
-            診断
-          </button>
-        )}
-        
-        {/* 開発環境用ファイルアップロードボタン */}
-        {process.env.NODE_ENV === 'development' && (
-          <>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileUpload}
-              accept=".csv"
-              className="hidden"
-              id="csv-file-upload"
-            />
-            <label
-              htmlFor="csv-file-upload"
-              className="bg-transparent text-blue-400 px-2.5 py-1.5 rounded border border-blue-400 text-xs hover:bg-blue-400 hover:text-surface transition-colors cursor-pointer"
-            >
-              アップロード
-            </label>
-          </>
-        )}
+        {/* Electron診断ボタン */}
+        <button
+          onClick={testElectronDialog}
+          className="bg-transparent text-purple-400 px-2.5 py-1.5 rounded border border-purple-400 text-xs hover:bg-purple-400 hover:text-surface transition-colors"
+        >
+          診断
+        </button>
         
         {/* 手動入力ボタン */}
         <button

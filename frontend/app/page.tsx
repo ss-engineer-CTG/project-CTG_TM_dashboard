@@ -14,7 +14,6 @@ import ClientInfo from './components/ClientInfo';
 import { getDefaultPath, testApiConnection } from './lib/services';
 import { useNotification } from './contexts/NotificationContext';
 import { useApi } from './contexts/ApiContext';
-import { APIConnectionStatus } from './lib/types';
 import { isClient } from './lib/utils/environment';
 
 // Electron UI初期化用のカスタムフック
@@ -44,56 +43,12 @@ const useElectronInitialization = () => {
   return { isElectronReady };
 };
 
-const FirstTimeUserGuide: React.FC<{onClose: () => void}> = ({onClose}) => {
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
-      <div className="dashboard-card max-w-2xl w-full">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-2xl font-bold text-text-primary">プロジェクト進捗ダッシュボードへようこそ</h2>
-          <button onClick={onClose} className="text-text-secondary hover:text-text-primary">
-            ✕
-          </button>
-        </div>
-        
-        <div className="space-y-4">
-          <p className="text-text-primary">
-            このアプリケーションを使ってプロジェクトの進捗を可視化しましょう。
-            以下の簡単なステップで始められます：
-          </p>
-          
-          <ol className="list-decimal pl-6 space-y-2 text-text-primary">
-            <li>右上の「<span className="text-text-accent">参照</span>」ボタンをクリックして、プロジェクトデータCSVファイルを選択します。</li>
-            <li>データが読み込まれると、プロジェクト一覧とメトリクスが表示されます。</li>
-            <li>進捗グラフやプロジェクト期間の分布を確認できます。</li>
-            <li>各プロジェクトの詳細とタスク情報が表示されます。</li>
-          </ol>
-          
-          <p className="text-text-primary">
-            初めてお使いの場合は、サンプルデータが自動的に表示されます。
-            実際のプロジェクトデータを使用するには、正しいCSV形式で用意してください。
-          </p>
-          
-          <div className="text-center mt-6">
-            <button 
-              onClick={onClose}
-              className="bg-text-accent text-surface px-4 py-2 rounded text-sm hover:bg-opacity-80 transition-colors"
-            >
-              始める
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 export default function Home() {
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const [initError, setInitError] = useState<{message: string, details?: any} | null>(null);
   const [connectionAttempts, setConnectionAttempts] = useState<number>(0);
   const [triedPorts, setTriedPorts] = useState<number[]>([]);
-  const [showGuide, setShowGuide] = useState<boolean>(false);
   const { addNotification } = useNotification();
   
   // Electron初期化状態を取得
@@ -113,14 +68,11 @@ export default function Home() {
   } = useProjects(selectedFilePath);
 
   // 初回レンダリング時にAPIの健全性をチェックしてデフォルトのファイルパスを取得
-  // クライアントサイドでのみ実行
   useEffect(() => {
-    // コンポーネントのマウント状態を追跡するフラグ
     let isMounted = true;
     
     const initializeApp = async () => {
       try {
-        // コンポーネントのアンマウント後は状態更新しない
         if (!isMounted) return;
         
         setConnectionAttempts(prev => prev + 1);
@@ -139,7 +91,6 @@ export default function Home() {
         const isConnected = await checkApiConnection();
         
         if (!isConnected) {
-          // エラーメッセージの表示とヘルプの提供
           setInitError({
             message: 'バックエンドサーバーに接続できません。',
             details: {
@@ -179,25 +130,12 @@ export default function Home() {
       } finally {
         if (isMounted) {
           setIsInitializing(false);
-          
-          // ローカルストレージで初回起動かどうかを確認
-          try {
-            const hasVisitedBefore = localStorage.getItem('hasVisitedBefore');
-            if (!hasVisitedBefore) {
-              setShowGuide(true);
-              localStorage.setItem('hasVisitedBefore', 'true');
-            }
-          } catch (e) {
-            // ローカルストレージへのアクセスエラーを無視
-            console.warn('ローカルストレージへのアクセスエラー:', e);
-          }
         }
       }
     };
     
     initializeApp();
     
-    // クリーンアップ関数
     return () => {
       isMounted = false;
     };
@@ -210,21 +148,16 @@ export default function Home() {
     setInitError(null);
     
     try {
-      // 前回の試行から時間をおいて再試行 (試行回数に応じて待機時間を調整)
       const waitTime = Math.min(connectionAttempts * 1000, 5000);
       
-      // ユーザーにフィードバック
       addNotification(`バックエンドサーバーへの接続を再試行しています...(${waitTime}ms 待機)`, 'info');
       
-      // 待機
       await new Promise(resolve => setTimeout(resolve, waitTime));
       
-      // 接続試行 - 新しいAPI機能を使用
       const result = await testApiConnection();
       if (result.success) {
         addNotification('APIサーバーに接続しました', 'success');
         
-        // デフォルトパスを取得
         const response = await getDefaultPath();
         if (response.success && response.path) {
           setSelectedFilePath(response.path);
@@ -236,7 +169,6 @@ export default function Home() {
           details: result.details
         });
         
-        // 接続試行回数に応じてより詳細なエラーメッセージを表示
         if (connectionAttempts >= 3) {
           addNotification('複数回の接続試行に失敗しました。アプリケーションを再起動してください。', 'error');
         } else {
@@ -281,12 +213,10 @@ export default function Home() {
       />
       
       <div className="max-w-7xl mx-auto px-4 py-6">
-        {/* API接続ステータス - 拡張コンポーネントを使用 */}
         <EnhancedAPIStatus 
           onRetry={handleApiStatusRetry} 
         />
         
-        {/* 初期化エラー - 接続エラーの場合は専用コンポーネント */}
         {!isInitializing && initError && initError.message.includes('接続できません') ? (
           <ConnectionError 
             onRetry={handleRetryConnection}
@@ -302,7 +232,6 @@ export default function Home() {
           />
         ) : null}
         
-        {/* データ取得エラー */}
         {error && (
           <ErrorMessage 
             message={error.message} 
@@ -311,7 +240,6 @@ export default function Home() {
           />
         )}
         
-        {/* メトリクスカード */}
         {metrics && (
           <MetricsCards 
             summary={metrics.summary} 
@@ -319,7 +247,6 @@ export default function Home() {
           />
         )}
         
-        {/* プロジェクト一覧 */}
         <ProjectTable 
           projects={projects || []} 
           isLoading={isLoading}
@@ -327,7 +254,6 @@ export default function Home() {
           filePath={selectedFilePath || undefined}
         />
         
-        {/* グラフセクション */}
         {metrics && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <ProgressChart 
@@ -341,11 +267,7 @@ export default function Home() {
           </div>
         )}
         
-        {/* クライアント環境情報 (開発モードのみ) */}
         <ClientInfo />
-        
-        {/* 初回起動ガイド */}
-        {showGuide && <FirstTimeUserGuide onClose={() => setShowGuide(false)} />}
       </div>
     </main>
   );
