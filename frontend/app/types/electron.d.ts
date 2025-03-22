@@ -1,10 +1,13 @@
 // Electronの型定義
 interface ElectronAPI {
+  // Electron識別フラグ（追加）
+  isElectron: boolean;
+  
   getAppPath: () => Promise<string>;
   getApiBaseUrl: () => Promise<string>;
   getTempPath: () => Promise<string>;
   env: {
-    isElectron: boolean;
+    isElectron: boolean;  // 明示的なフラグ
     apiUrl: string;
   };
   fs: {
@@ -34,6 +37,12 @@ interface ElectronAPI {
   ipcRenderer: {
     on: (channel: string, callback: (...args: any[]) => void) => (() => void);
   };
+  // 診断機能（追加）
+  diagnostics?: {
+    getStartupTime: () => number;
+    isInitialized: () => boolean;
+    checkApiConnection: () => Promise<any>;
+  };
 }
 
 // グローバルwindowオブジェクトの拡張
@@ -42,7 +51,7 @@ declare global {
     electron?: ElectronAPI;
     currentApiPort?: number;
     apiInitialized?: boolean;
-    electronReady?: boolean;
+    electronReady?: boolean;  // 明示的なフラグ（追加）
   }
 }
 

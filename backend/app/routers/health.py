@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Response
+from fastapi.responses import JSONResponse
 from datetime import datetime
 import os
 import platform
@@ -7,7 +8,7 @@ import sys
 router = APIRouter()
 
 # GET メソッドと HEAD メソッドの両方をサポート
-@router.get("/health", response_model=dict)
+@router.get("/health")
 @router.head("/health", status_code=200)
 async def health_check(response: Response):
     """
@@ -18,8 +19,8 @@ async def health_check(response: Response):
     """
     # HEADリクエストの場合は早期リターン
     if response.headers.get('sec-fetch-mode') == 'no-cors' or response.headers.get('connection') == 'close':
-        response.status_code = 200
-        return {"status": "ok"}
+        # 修正: 明示的にJSONResponseを返す
+        return JSONResponse(content={"status": "ok"}, status_code=200)
     
     try:
         # サーバー情報を取得
@@ -42,23 +43,30 @@ async def health_check(response: Response):
             except Exception as e:
                 file_error = f"ファイル確認エラー: {str(e)}"
         
-        return {
-            "status": "ok",
-            "time": datetime.now().isoformat(),
-            "version": "1.0.0",
-            "environment": {
-                "python_version": python_version,
-                "os_info": os_info,
-                "dashboard_file": dashboard_file,
-                "dashboard_file_exists": file_exists,
-                "file_error": file_error,
-                "app_path": app_path
-            }
-        }
+        # 修正: 明示的にJSONResponseを返す
+        return JSONResponse(
+            content={
+                "status": "ok",
+                "time": datetime.now().isoformat(),
+                "version": "1.0.0",
+                "environment": {
+                    "python_version": python_version,
+                    "os_info": os_info,
+                    "dashboard_file": dashboard_file,
+                    "dashboard_file_exists": file_exists,
+                    "file_error": file_error,
+                    "app_path": app_path
+                }
+            },
+            status_code=200
+        )
     except Exception as e:
-        response.status_code = 500
-        return {
-            "status": "error",
-            "time": datetime.now().isoformat(),
-            "error": str(e)
-        }
+        # 修正: エラー時も明示的にJSONResponseを返す
+        return JSONResponse(
+            content={
+                "status": "error",
+                "time": datetime.now().isoformat(),
+                "error": str(e)
+            },
+            status_code=500
+        )

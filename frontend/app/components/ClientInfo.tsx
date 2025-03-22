@@ -15,17 +15,48 @@ const ClientInfo: React.FC = () => {
     electronProps: [] as string[]
   });
   
-  // マウント後にクライアント環境情報を取得
+  const [retryCount, setRetryCount] = useState(0);
+  
+  // マウント後にクライアント環境情報を取得（遅延検出ロジック追加）
   useEffect(() => {
-    const isElectron = isElectronEnvironment();
+    // 即時実行の初期チェック
+    checkElectronEnvironment();
     
-    setElectronInfo({
-      isElectron,
-      apiPort: window.currentApiPort,
-      apiBaseUrl: window.electron?.env?.apiUrl || '',
-      electronProps: isElectron ? Object.keys(window.electron || {}) : []
-    });
-  }, []);
+    // 念のため少し遅延させて再チェック（タイミング問題対策）
+    const delayedCheck = setTimeout(() => {
+      if (!electronInfo.isElectron && retryCount < 3) {
+        console.log(`Electron環境検出: 再試行 ${retryCount + 1}/3`);
+        checkElectronEnvironment();
+        setRetryCount(prev => prev + 1);
+      }
+    }, 1000); // 1秒後に再チェック
+    
+    return () => clearTimeout(delayedCheck);
+  }, [retryCount]);
+  
+  // Electron環境検出ロジック
+  const checkElectronEnvironment = () => {
+    const isElectron = isElectronEnvironment();
+    console.log('ClientInfo: Electron環境検出結果:', isElectron);
+    
+    if (isElectron || window.electron) {
+      // Electron環境が検出された場合
+      setElectronInfo({
+        isElectron: true,
+        apiPort: window.currentApiPort,
+        apiBaseUrl: window.electron?.env?.apiUrl || '',
+        electronProps: Object.keys(window.electron || {})
+      });
+    } else {
+      // 検出されなかった場合でも情報を更新
+      setElectronInfo({
+        isElectron: false,
+        apiPort: window.currentApiPort,
+        apiBaseUrl: '',
+        electronProps: []
+      });
+    }
+  };
 
   // 開発環境でのみ表示するデバッグ情報
   if (process.env.NODE_ENV !== 'development') {

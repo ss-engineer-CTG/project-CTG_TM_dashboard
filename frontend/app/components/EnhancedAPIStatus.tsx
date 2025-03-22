@@ -12,9 +12,45 @@ interface EnhancedAPIStatusProps {
 const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [countdown, setCountdown] = useState(0);
+  const [debugInfo, setDebugInfo] = useState<any>(null);
+  const [showDebug, setShowDebug] = useState(false);
   
   // APIコンテキストから状態を取得
-  const { status, reconnectAttempts, checkConnection } = useApi();
+  const { status: apiStatus, reconnectAttempts, checkConnection } = useApi();
+  
+  // 診断情報の収集
+  useEffect(() => {
+    if (isClient && !apiStatus.connected && reconnectAttempts > 0) {
+      const collectDebugInfo = async () => {
+        const info: any = {};
+        
+        // Electron情報
+        if (window.electron) {
+          info.isElectron = true;
+          info.electronReady = window.electronReady || false;
+          info.apiInitialized = window.apiInitialized || false;
+          
+          try {
+            info.apiBaseUrl = await window.electron.getApiBaseUrl();
+          } catch (e) {
+            info.apiBaseUrlError = e.message;
+          }
+        } else {
+          info.isElectron = false;
+        }
+        
+        // ポート情報
+        info.currentApiPort = window.currentApiPort;
+        
+        // ユーザーエージェント
+        info.userAgent = navigator.userAgent;
+        
+        setDebugInfo(info);
+      };
+      
+      collectDebugInfo();
+    }
+  }, [apiStatus.connected, reconnectAttempts]);
   
   // 自動再接続のカウントダウン - クライアントサイドでのみ実行
   useEffect(() => {
@@ -24,13 +60,13 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
     // コンポーネントのマウント状態を追跡するフラグ
     let isMounted = true;
     
-    if (status.connected || !status.message.includes('接続できません')) {
+    if (apiStatus.connected || !apiStatus.message.includes('接続できません')) {
       return;
     }
     
     // 初めての数回の失敗では自動再接続を試みる
-    if (reconnectAttempts < 3) {
-      const autoRetryTime = 15 - (reconnectAttempts * 5);
+    if (reconnectAttempts < 5) { // 回数増加: 3→5
+      const autoRetryTime = 15 - (reconnectAttempts * 3); // 時間調整: 15→15, 5単位→3単位
       setCountdown(autoRetryTime);
       
       const timer = setInterval(() => {
@@ -55,7 +91,7 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
     return () => {
       isMounted = false;
     };
-  }, [status.connected, status.message, reconnectAttempts]);
+  }, [apiStatus.connected, apiStatus.message, reconnectAttempts]);
   
   // 再接続ハンドラー
   const handleRetry = async () => {
@@ -71,7 +107,7 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
   };
   
   // 接続済みの場合は簡略表示
-  if (status.connected && !status.loading) {
+  if (apiStatus.connected && !apiStatus.loading) {
     return (
       <div className="mb-4 flex items-center text-xs text-green-500">
         <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
@@ -81,7 +117,7 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
   }
   
   // 初期ロード中の場合
-  if (status.loading && reconnectAttempts === 0) {
+  if (apiStatus.loading && reconnectAttempts === 0) {
     return (
       <div className="mb-4 p-3 rounded bg-gray-700">
         <div className="flex items-center">
@@ -95,16 +131,39 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
     );
   }
   
+  // 詳細デバッグ情報表示
+  const renderDebugInfo = () => {
+    if (!showDebug || !debugInfo) return null;
+    
+    return (
+      <div className="mt-2 p-3 bg-gray-900 rounded-md text-xs font-mono">
+        <pre className="text-gray-300 overflow-auto max-h-40">{JSON.stringify(debugInfo, null, 2)}</pre>
+      </div>
+    );
+  };
+  
   // エラー時の詳細なヘルプ表示
   const renderDetailedHelp = () => {
-    if (!status.connected && !status.loading && reconnectAttempts > 1) {
+    if (!apiStatus.connected && !apiStatus.loading && reconnectAttempts > 1) {
       return (
         <div className="mt-4 p-3 bg-gray-800 rounded-md">
-          <h4 className="text-yellow-400 text-sm font-medium mb-2">トラブルシューティング:</h4>
-          <ol className="list-decimal list-inside text-gray-300 space-y-1 text-sm">
+          <div className="flex justify-between items-center mb-2">
+            <h4 className="text-yellow-400 text-sm font-medium">トラブルシューティング:</h4>
+            <button 
+              onClick={() => setShowDebug(!showDebug)} 
+              className="text-xs text-blue-400 hover:text-blue-300"
+            >
+              {showDebug ? '診断情報を隠す' : '診断情報を表示'}
+            </button>
+          </div>
+          
+          {renderDebugInfo()}
+          
+          <ol className="list-decimal list-inside text-gray-300 space-y-1 text-sm mt-2">
             <li>アプリケーションを<strong>完全に終了</strong>して再起動してください</li>
             <li>タスクマネージャーでPython関連プロセスを確認し、終了してください</li>
             <li>ポート8000、8080が他のアプリで使用されていないか確認してください</li>
+            <li>必要なPythonパッケージがインストールされているか確認してください</li>
             <li>管理者権限でアプリケーションを実行してみてください</li>
           </ol>
         </div>
@@ -118,7 +177,7 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
     <div className="mb-4 p-3 rounded bg-red-900 bg-opacity-30">
       <div className="flex items-center justify-between">
         <div className="flex items-center">
-          {status.loading ? (
+          {apiStatus.loading ? (
             <div className="animate-spin w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full mr-3"></div>
           ) : (
             <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-red-500 mr-3" viewBox="0 0 20 20" fill="currentColor">
@@ -126,8 +185,8 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
             </svg>
           )}
           <div>
-            <p className="font-medium text-white">{status.loading ? 'API接続確認中...' : 'API接続エラー'}</p>
-            <p className="text-sm text-gray-300">{status.message}</p>
+            <p className="font-medium text-white">{apiStatus.loading ? 'API接続確認中...' : 'API接続エラー'}</p>
+            <p className="text-sm text-gray-300">{apiStatus.message}</p>
             
             {/* カウントダウン表示 */}
             {countdown > 0 && (
@@ -138,7 +197,7 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
           </div>
         </div>
         
-        {!status.loading && (
+        {!apiStatus.loading && (
           <button
             onClick={handleRetry}
             disabled={isReconnecting}
@@ -151,17 +210,18 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
         )}
       </div>
       
-      {!status.loading && (
+      {!apiStatus.loading && (
         <div className="mt-2 text-xs text-gray-400">
           <p>考えられる原因:</p>
           <ul className="list-disc list-inside ml-2 mt-1">
             <li>バックエンドサーバーが起動中です - しばらくお待ちください</li>
+            <li>必要なPythonパッケージがインストールされていない可能性があります</li>
             <li>バックエンドサーバーが別のポートで実行されています</li>
             <li>ファイアウォールがブロックしています</li>
             <li>サーバープロセスが終了した可能性があります</li>
           </ul>
           
-          {reconnectAttempts >= 3 && (
+          {reconnectAttempts >= 5 && ( // 回数増加: 3→5
             <div className="mt-2 p-2 border border-yellow-600 rounded text-yellow-300">
               <p className="font-medium">自動再接続に複数回失敗しました。</p>
               <p className="mt-1">アプリケーションを再起動するか、ポート設定を確認してください。</p>

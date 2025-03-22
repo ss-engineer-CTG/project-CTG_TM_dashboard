@@ -18,16 +18,49 @@ const ConnectionError: React.FC<ConnectionErrorProps> = ({
 }) => {
   const [isRetrying, setIsRetrying] = useState(false);
   const [detailsVisible, setDetailsVisible] = useState(false);
+  const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
   const [countdown, setCountdown] = useState(0);
+  const [diagnosticInfo, setDiagnosticInfo] = useState<any>(null);
+  
+  // 診断情報の収集
+  useEffect(() => {
+    if (isClient && window.electron?.diagnostics) {
+      try {
+        const collectDiagnostics = async () => {
+          try {
+            const apiStatus = await window.electron.diagnostics.checkApiConnection();
+            setDiagnosticInfo({
+              apiStatus,
+              electronReady: window.electronReady,
+              startupTime: window.electron.diagnostics.getStartupTime(),
+              isElectron: window.electron.env.isElectron,
+              apiInitialized: window.apiInitialized,
+              currentApiPort: window.currentApiPort,
+              timestamp: Date.now()
+            });
+          } catch (e) {
+            setDiagnosticInfo({
+              error: e.message,
+              timestamp: Date.now()
+            });
+          }
+        };
+        
+        collectDiagnostics();
+      } catch (e) {
+        console.error('診断情報収集エラー:', e);
+      }
+    }
+  }, []);
   
   // 自動再試行機能 - クライアントサイドでのみ実行
   useEffect(() => {
     // サーバーサイドレンダリング時は何もしない
     if (!isClient) return;
 
-    // 最初の3回は自動再試行
-    if (attempts <= 3) {
-      const autoRetryTime = 30 - (attempts * 5);
+    // 最初の5回は自動再試行（回数増加：3→5）
+    if (attempts <= 5) {
+      const autoRetryTime = 30 - (attempts * 3); // 回数ごとの待機時間調整
       setCountdown(autoRetryTime);
       
       const timer = setInterval(() => {
@@ -61,6 +94,66 @@ const ConnectionError: React.FC<ConnectionErrorProps> = ({
     return isClient ? (navigator.onLine ? 'はい' : 'いいえ') : '不明';
   };
 
+  // Pythonプロセスに関するトラブルシューティングガイド
+  const renderPythonGuide = () => {
+    return (
+      <div className="mt-3 bg-gray-800 p-4 rounded-md">
+        <h4 className="font-bold text-yellow-300 mb-2">Python環境のトラブルシューティング:</h4>
+        <ol className="list-decimal list-inside text-gray-200 space-y-2">
+          <li>
+            Python環境が正しくインストールされていることを確認:
+            <ul className="list-disc list-inside ml-4 mt-1 text-gray-300">
+              <li>コマンドプロンプトで「python --version」を実行して確認</li>
+              <li>Pythonバージョン 3.8 以上が必要です</li>
+            </ul>
+          </li>
+          <li>
+            必要なパッケージがインストールされているか確認:
+            <ul className="list-disc list-inside ml-4 mt-1 text-gray-300">
+              <li>backend/requirements.txt 内のパッケージをインストール:</li>
+              <li className="font-mono bg-gray-900 p-1 mt-1 rounded">pip install -r backend/requirements.txt</li>
+              <li>特に重要なのは: pandas, fastapi, uvicorn</li>
+            </ul>
+          </li>
+          <li>
+            仮想環境を使用している場合:
+            <ul className="list-disc list-inside ml-4 mt-1 text-gray-300">
+              <li>仮想環境が有効化されていることを確認</li>
+              <li>アプリケーションを仮想環境から起動</li>
+            </ul>
+          </li>
+        </ol>
+      </div>
+    );
+  };
+
+  // ポート競合に関するトラブルシューティングガイド
+  const renderPortGuide = () => {
+    return (
+      <div className="mt-3 bg-gray-800 p-4 rounded-md">
+        <h4 className="font-bold text-yellow-300 mb-2">ポート競合のトラブルシューティング:</h4>
+        <ol className="list-decimal list-inside text-gray-200 space-y-2">
+          <li>
+            使用中のポートを確認:
+            <ul className="list-disc list-inside ml-4 mt-1 text-gray-300">
+              <li>Windows: コマンドプロンプトで「netstat -ano | findstr 8000」を実行</li>
+              <li>Mac/Linux: ターミナルで「lsof -i :8000」を実行</li>
+              <li>試行されたポート: {ports.join(', ')}</li>
+            </ul>
+          </li>
+          <li>
+            競合するプロセスを終了:
+            <ul className="list-disc list-inside ml-4 mt-1 text-gray-300">
+              <li>Windows: タスクマネージャーでプロセスを終了</li>
+              <li>Mac/Linux: 「kill [PID]」でプロセスを終了</li>
+              <li>特にPython, node.js関連のプロセスを確認</li>
+            </ul>
+          </li>
+        </ol>
+      </div>
+    );
+  };
+
   return (
     <div className="dashboard-card bg-red-900 bg-opacity-20 p-6">
       <div className="flex items-start">
@@ -84,8 +177,9 @@ const ConnectionError: React.FC<ConnectionErrorProps> = ({
             <h3 className="font-bold text-yellow-300 mb-1">考えられる原因:</h3>
             <ul className="list-disc list-inside space-y-1 text-white">
               <li>バックエンドサーバーが起動していない</li>
+              <li>必要なPythonパッケージがインストールされていない</li>
               <li>ポートが他のアプリケーションによって使用されている</li>
-              <li>ファイアウォールがブロックしている</li>
+              <li>ファイアウォールがポートをブロックしている</li>
               <li>セキュリティソフトウェアが接続を妨げている</li>
             </ul>
           </div>
@@ -94,48 +188,74 @@ const ConnectionError: React.FC<ConnectionErrorProps> = ({
             <h3 className="font-bold text-green-300 mb-1">解決策:</h3>
             <ul className="list-disc list-inside space-y-1 text-white">
               <li>アプリケーションを完全に終了して再起動する</li>
-              <li>タスクマネージャーを開き、Python関連のプロセスを終了する</li>
+              <li>タスクマネージャーでPython関連のプロセスを終了する</li>
+              <li>backend/requirements.txtのパッケージをインストールする</li>
               <li>ポート8000, 8080を使用している他のアプリケーションを確認して終了する</li>
               <li>管理者権限でアプリケーションを実行する</li>
             </ul>
           </div>
           
-          {/* 診断情報 */}
+          {/* トラブルシューティングガイド */}
           <div className="mt-4">
-            <button
-              onClick={() => setDetailsVisible(!detailsVisible)}
-              className="text-blue-300 hover:text-blue-100 underline"
-            >
-              {detailsVisible ? '診断情報を隠す' : '診断情報を表示'}
-            </button>
-            
-            {detailsVisible && (
-              <div className="mt-2 bg-gray-800 p-3 rounded-md text-sm">
-                <p className="text-white font-medium mb-2">接続診断:</p>
-                <p className="text-gray-300">試行されたポート: {ports.join(', ')}</p>
-                <p className="text-gray-300">接続試行回数: {attempts}</p>
-                <p className="text-gray-300">最後のエラー: {lastError || '情報なし'}</p>
-                <p className="text-gray-300 mt-2">ブラウザネットワーク状態:</p>
-                <p className="text-gray-300">オンライン: {getNetworkStatus()}</p>
-                <div className="mt-3 text-yellow-300">
-                  <p>推奨されるトラブルシューティング:</p>
-                  <ol className="list-decimal list-inside ml-2 text-gray-200">
-                    <li>アプリケーションを完全に終了し、再起動する</li>
-                    <li>タスクマネージャーでpythonプロセスを強制終了する</li>
-                    <li>ポートスキャンツールでポート8000, 8080の状態を確認する</li>
-                    <li>ファイアウォール設定でアプリケーションを許可する</li>
-                    <li>管理者権限でアプリケーションを実行する</li>
+            <details className="cursor-pointer">
+              <summary className="text-blue-300 hover:text-blue-100">詳細なトラブルシューティングガイド</summary>
+              <div className="mt-3">
+                <div className="flex space-x-2 mb-2">
+                  <button
+                    onClick={() => setDiagnosticsVisible(!diagnosticsVisible)}
+                    className="text-sm bg-blue-800 text-blue-100 px-3 py-1 rounded hover:bg-blue-700"
+                  >
+                    {diagnosticsVisible ? '診断情報を隠す' : '診断情報を表示'}
+                  </button>
+                  <button
+                    onClick={() => setDetailsVisible(!detailsVisible)}
+                    className="text-sm bg-blue-800 text-blue-100 px-3 py-1 rounded hover:bg-blue-700"
+                  >
+                    {detailsVisible ? '接続情報を隠す' : '接続情報を表示'}
+                  </button>
+                </div>
+                
+                {diagnosticsVisible && diagnosticInfo && (
+                  <div className="mt-2 bg-gray-800 p-3 rounded-md text-xs font-mono overflow-auto max-h-40">
+                    <pre className="text-gray-300">{JSON.stringify(diagnosticInfo, null, 2)}</pre>
+                  </div>
+                )}
+                
+                {detailsVisible && (
+                  <div className="mt-2 bg-gray-800 p-3 rounded-md text-sm">
+                    <p className="text-white font-medium mb-2">接続診断:</p>
+                    <p className="text-gray-300">試行されたポート: {ports.join(', ')}</p>
+                    <p className="text-gray-300">接続試行回数: {attempts}</p>
+                    <p className="text-gray-300">最後のエラー: {lastError || '情報なし'}</p>
+                    <p className="text-gray-300 mt-2">ブラウザネットワーク状態:</p>
+                    <p className="text-gray-300">オンライン: {getNetworkStatus()}</p>
+                  </div>
+                )}
+                
+                {/* Pythonトラブルシューティングガイド */}
+                {renderPythonGuide()}
+                
+                {/* ポート競合トラブルシューティングガイド */}
+                {renderPortGuide()}
+                
+                <div className="mt-3 bg-gray-800 p-4 rounded-md">
+                  <h4 className="font-bold text-yellow-300 mb-2">アプリケーションの再起動:</h4>
+                  <ol className="list-decimal list-inside text-gray-200 space-y-2">
+                    <li>アプリケーションを完全に終了</li>
+                    <li>タスクマネージャーですべてのPythonプロセスを終了</li>
+                    <li>管理者として再起動 (Windowsでは右クリック→管理者として実行)</li>
+                    <li>問題が解決しない場合は、PCを再起動してから再試行</li>
                   </ol>
                 </div>
               </div>
-            )}
+            </details>
           </div>
           
           <div className="flex justify-between items-center mt-4">
             <p className="text-gray-400 text-sm">
-              {attempts <= 3 && countdown > 0
+              {attempts <= 5 && countdown > 0
                 ? `${countdown}秒後に自動的に再試行します...` 
-                : attempts <= 3
+                : attempts <= 5
                   ? '自動再試行を実行中...'
                   : '自動再試行の制限に達しました。手動で再試行してください。'}
             </p>

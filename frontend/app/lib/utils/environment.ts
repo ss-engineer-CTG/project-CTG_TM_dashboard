@@ -7,26 +7,52 @@
 export const isClient = typeof window !== 'undefined';
 
 /**
+ * キャッシュとタイムアウト付きのより堅牢なElectron環境検出
+ */
+let _isElectronEnv: boolean | null = null;
+let _detectionAttempts = 0;
+
+/**
  * Electron環境かどうかを判定
- * クライアントサイドでのみ動作し、window.electron オブジェクトの存在を確認
+ * クライアントサイドでのみ動作し、複数の検出方法を組み合わせて判定
  */
 export const isElectronEnvironment = (): boolean => {
   if (!isClient) return false;
   
-  const result = isClient && 
-         typeof window !== 'undefined' && 
-         typeof window.electron !== 'undefined' && 
-         window.electron !== null;
-         
-  // デバッグログ追加
-  console.log('isElectronEnvironment 検出結果:', result, {
-    isClient,
-    windowDefined: typeof window !== 'undefined',
-    electronDefined: typeof window !== 'undefined' && typeof window.electron !== 'undefined',
-    electronProperties: typeof window !== 'undefined' && window.electron ? Object.keys(window.electron) : []
-  });
+  // 既に検出済みならキャッシュした結果を返す
+  if (_isElectronEnv !== null) return _isElectronEnv;
   
-  return result;
+  // 検出回数制限（最大3回）
+  if (_detectionAttempts >= 3) {
+    // デフォルト値を返す（最後に試行した結果）
+    return _isElectronEnv || false;
+  }
+  _detectionAttempts++;
+
+  // 主に window.electron の存在で判定
+  const hasElectronAPI = typeof window.electron !== 'undefined' && window.electron !== null;
+  
+  // バックアップとして他の方法も試す
+  const hasElectronFlag = window.electronReady === true;
+  const hasUserAgent = typeof navigator !== 'undefined' && 
+                      navigator.userAgent.toLowerCase().indexOf('electron') > -1;
+  
+  _isElectronEnv = hasElectronAPI || hasElectronFlag || hasUserAgent;
+  
+  // デバッグログ（3回ごとに出力を減らす）
+  if (_detectionAttempts % 3 === 1 || _detectionAttempts <= 2) {
+    console.log('Electron環境検出詳細:', {
+      hasElectronAPI,
+      hasElectronFlag, 
+      hasUserAgent,
+      userAgent: navigator.userAgent,
+      finalResult: _isElectronEnv,
+      electronProps: hasElectronAPI ? Object.keys(window.electron) : [],
+      detectionAttempt: _detectionAttempts
+    });
+  }
+  
+  return _isElectronEnv;
 };
 
 /**

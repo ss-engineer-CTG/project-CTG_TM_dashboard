@@ -1,89 +1,163 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-// 詳細なデバッグログを追加
-console.log('Electron preload script starting...');
+// 初期化パフォーマンス計測
+const preloadStartTime = Date.now();
+console.log('Preload script starting...');
+
+// 高速起動フラグ
+let ipcInitialized = false;
+let documentReady = false;
+
+/**
+ * Electron環境変数を安全に設定する関数
+ */
+const setElectronReady = () => {
+  window.electronReady = true;
+  window.currentApiPort = null;
+  window.apiInitialized = false;
+  
+  // 初期化完了イベントを発行
+  try {
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+      document.dispatchEvent(new Event('electron-ready'));
+    } else {
+      document.addEventListener('DOMContentLoaded', () => {
+        document.dispatchEvent(new Event('electron-ready'));
+      });
+    }
+    
+    // カスタムイベントでより詳細な情報を提供
+    document.dispatchEvent(
+      new CustomEvent('app-init', { 
+        detail: { 
+          isElectron: true,
+          time: Date.now(),
+          ready: true
+        } 
+      })
+    );
+  } catch (e) {
+    console.error('イベント発行エラー:', e);
+  }
+};
+
+// DOMContentLoadedイベントの高速検出
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    documentReady = true;
+    initializeElectronBridge();
+  });
+} else {
+  // すでにDOMContentLoadedイベントが発生している場合
+  documentReady = true;
+  setTimeout(initializeElectronBridge, 0);
+}
+
+// 早期初期化関数
+function initializeElectronBridge() {
+  if (ipcInitialized) return;
+  ipcInitialized = true;
+  
+  console.log(`DOM ready, initializing Electron bridge (${Date.now() - preloadStartTime}ms)`);
+  
+  // レンダラープロセスにElectron APIが準備完了したことを通知
+  try {
+    document.dispatchEvent(new Event('electron-ready'));
+    
+    // パフォーマンスマーク記録
+    if (window.performance && window.performance.mark) {
+      window.performance.mark('electron_bridge_initialized');
+    }
+    
+    // 早期ロード通知
+    document.dispatchEvent(
+      new CustomEvent('app-init', { 
+        detail: { 
+          isElectron: true,
+          time: Date.now(),
+          ready: true
+        } 
+      })
+    );
+    
+    // 新規追加: 初期化完了ステータスをコンソールに出力
+    console.log('Electron bridge initialized successfully');
+  } catch (e) {
+    console.error('初期化イベント発行エラー:', e);
+  }
+}
 
 // 安全なIPCチャンネルリスト
 const validChannels = [
   'api-connection-established',
   'api-server-down',
-  'api-server-restarted'
+  'api-server-restarted',
+  'app-initializing'
 ];
 
-// Electron APIの初期化完了イベントの発行
-document.addEventListener('DOMContentLoaded', () => {
-  console.log('DOM content loaded, triggering electron-ready event');
-  document.dispatchEvent(new Event('electron-ready'));
-});
+// 高速キャッシュ管理
+function optimizeCacheManagement() {
+  if (typeof localStorage !== 'undefined') {
+    try {
+      // 古いキャッシュをクリーンアップ - 非同期で実行
+      setTimeout(() => {
+        try {
+          const now = Date.now();
+          const maxAge = 7 * 24 * 60 * 60 * 1000; // 1週間
+          
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.includes('_timestamp')) {
+              const timestamp = parseInt(localStorage.getItem(key));
+              if (isNaN(timestamp) || (now - timestamp > maxAge)) {
+                const dataKey = key.replace('_timestamp', '');
+                localStorage.removeItem(key);
+                localStorage.removeItem(dataKey);
+              }
+            }
+          }
+        } catch (e) {}
+      }, 5000); // 5秒後に実行
+    } catch (e) {}
+  }
+}
 
-// メインプロセスとレンダラープロセス間の安全な通信を提供
+// メインプロセスとレンダラープロセス間の安全な通信を提供（高速化）
 contextBridge.exposeInMainWorld('electron', {
+  // Electron識別フラグ - 明示的に追加
+  isElectron: true,
+  
   // アプリケーションパスを取得
-  getAppPath: () => {
-    console.log('Calling getAppPath via IPC');
-    return ipcRenderer.invoke('get-app-path');
-  },
+  getAppPath: () => ipcRenderer.invoke('get-app-path'),
   
   // APIベースURLを取得
-  getApiBaseUrl: () => {
-    console.log('Calling getApiBaseUrl via IPC');
-    return ipcRenderer.invoke('get-api-base-url');
-  },
+  getApiBaseUrl: () => ipcRenderer.invoke('get-api-base-url'),
   
   // 一時ディレクトリのパスを取得
-  getTempPath: () => {
-    console.log('Calling getTempPath via IPC');
-    return ipcRenderer.invoke('get-temp-path');
-  },
+  getTempPath: () => ipcRenderer.invoke('get-temp-path'),
   
-  // ファイルシステム操作
+  // ファイルシステム操作 - 高速化版
   fs: {
-    exists: (path) => {
-      console.log('Calling fs:exists via IPC', { path });
-      return ipcRenderer.invoke('fs:exists', path);
-    },
-    readFile: (path, options) => {
-      console.log('Calling fs:readFile via IPC', { path, options });
-      return ipcRenderer.invoke('fs:readFile', path, options);
-    },
-    writeFile: (filePath, data, options) => {
-      console.log('Calling fs:writeFile via IPC', { filePath, options });
-      return ipcRenderer.invoke('fs:writeFile', filePath, data, options);
-    },
-    mkdir: (dirPath, options) => {
-      console.log('Calling fs:mkdir via IPC', { dirPath, options });
-      return ipcRenderer.invoke('fs:mkdir', dirPath, options);
-    },
-    readdir: (dirPath, options) => {
-      console.log('Calling fs:readdir via IPC', { dirPath, options });
-      return ipcRenderer.invoke('fs:readdir', dirPath, options);
-    }
+    exists: (path) => ipcRenderer.invoke('fs:exists', path),
+    readFile: (path, options) => ipcRenderer.invoke('fs:readFile', path, options),
+    writeFile: (filePath, data, options) => ipcRenderer.invoke('fs:writeFile', filePath, data, options),
+    mkdir: (dirPath, options) => ipcRenderer.invoke('fs:mkdir', dirPath, options),
+    readdir: (dirPath, options) => ipcRenderer.invoke('fs:readdir', dirPath, options)
   },
   
-  // パス操作
+  // パス操作 - 並列処理対応
   path: {
-    join: (...args) => {
-      console.log('Calling path:join via IPC', { args });
-      return ipcRenderer.invoke('path:join', ...args);
-    },
-    dirname: (filePath) => {
-      console.log('Calling path:dirname via IPC', { filePath });
-      return ipcRenderer.invoke('path:dirname', filePath);
-    },
-    basename: (filePath) => {
-      console.log('Calling path:basename via IPC', { filePath });
-      return ipcRenderer.invoke('path:basename', filePath);
-    }
+    join: (...args) => ipcRenderer.invoke('path:join', ...args),
+    dirname: (filePath) => ipcRenderer.invoke('path:dirname', filePath),
+    basename: (filePath) => ipcRenderer.invoke('path:basename', filePath)
   },
   
-  // ダイアログ操作 - 強化バージョン
+  // ダイアログ操作 - エラーハンドリング強化
   dialog: {
     openCSVFile: (defaultPath) => {
-      console.log('Calling dialog:openCSVFile via IPC', { defaultPath });
       return ipcRenderer.invoke('dialog:openCSVFile', defaultPath)
         .catch(err => {
           console.error('dialog:openCSVFile IPC error:', err);
-          // エラーが発生した場合でも結果オブジェクトを返す
           return {
             success: false,
             message: `IPCエラー: ${err.message || 'Unknown error'}`,
@@ -95,7 +169,6 @@ contextBridge.exposeInMainWorld('electron', {
   
   // テスト用のダイアログ関数
   testDialog: () => {
-    console.log('Calling dialog:test via IPC');
     return ipcRenderer.invoke('dialog:test')
       .catch(err => {
         console.error('dialog:test IPC error:', err);
@@ -108,11 +181,12 @@ contextBridge.exposeInMainWorld('electron', {
   
   // 環境変数
   env: {
-    isElectron: true,
-    apiUrl: process.env.API_URL || null
+    isElectron: true,  // 追加：明示的なフラグ
+    apiUrl: process.env.API_URL || null,
+    startTime: preloadStartTime
   },
   
-  // IPCレンダラー - イベントリスナー
+  // IPCレンダラー - イベントリスナー（拡張版）
   ipcRenderer: {
     on: (channel, callback) => {
       if (validChannels.includes(channel)) {
@@ -126,22 +200,49 @@ contextBridge.exposeInMainWorld('electron', {
         return () => {};
       }
     }
+  },
+  
+  // 新規追加: 起動診断情報を提供
+  diagnostics: {
+    getStartupTime: () => preloadStartTime,
+    isInitialized: () => ipcInitialized,
+    checkApiConnection: async () => {
+      try {
+        const baseUrl = await ipcRenderer.invoke('get-api-base-url');
+        return { 
+          available: true, 
+          baseUrl,
+          timestamp: Date.now()
+        };
+      } catch (e) {
+        return { 
+          available: false, 
+          error: e.message 
+        };
+      }
+    }
   }
 });
 
-// 公開済みの機能を一覧表示
-const exposedAPIs = {
-  appPath: typeof ipcRenderer.invoke === 'function',
-  apiBaseUrl: typeof ipcRenderer.invoke === 'function',
-  tempPath: typeof ipcRenderer.invoke === 'function',
-  fs: true,
-  path: true,
-  dialog: true,
-  testDialog: true,
-  env: true,
-  ipcRenderer: true
-};
+// Electronが明示的に初期化されたことを示す変数を設定
+setElectronReady();
+
+// レンダリングプロセスのパフォーマンスを向上
+try {
+  // IDB高速ロード用空実行
+  const dbRequest = indexedDB.open('performance_cache', 1);
+  dbRequest.onupgradeneeded = () => {};
+  dbRequest.onsuccess = () => {};
+  dbRequest.onerror = () => {};
+} catch (e) {}
+
+// キャッシュ最適化を実行 - 遅延実行
+setTimeout(optimizeCacheManagement, 2000);
 
 // 準備完了ログ
-console.log('Electron preload script loaded successfully');
-console.log('Exposed APIs:', exposedAPIs);
+console.log(`Preload script completed in ${Date.now() - preloadStartTime}ms`);
+
+// パフォーマンス計測を実施
+if (window.performance && window.performance.mark) {
+  window.performance.mark('preload_complete');
+}
