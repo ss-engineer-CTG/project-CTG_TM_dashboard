@@ -56,7 +56,9 @@ export const isElectronEnvironment = (): boolean => {
       if (document.querySelector('meta[name="electron-ready"]')) {
         hasElectronReadyEvent = true;
       }
-    } catch (e) {}
+    } catch (e) {
+      /* エラーを無視 */
+    }
     
     // 結果をコンソールにログ出力（デバッグ用）
     console.log('Electron環境検出詳細:', {

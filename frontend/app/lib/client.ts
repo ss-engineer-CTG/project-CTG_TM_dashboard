@@ -120,16 +120,10 @@ class ApiClient {
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        ...fetchOptions.headers
+        ...(fetchOptions.headers || {})
       },
       body,
-      ...fetchOptions,
-      // headersとbodyを上書きするのを防ぐ
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        ...(fetchOptions.headers || {})
-      }
+      ...fetchOptions
     };
     
     // リトライカウンター
@@ -147,53 +141,60 @@ class ApiClient {
       try {
         // リクエストの作成とAbortControllerの設定
         const controller = new AbortController();
-        const timeoutId = timeout > 0 ? setTimeout(() => controller.abort(), timeout) : null;
+        let timeoutId: NodeJS.Timeout | null = null;
+        
+        if (timeout > 0) {
+          timeoutId = setTimeout(() => controller.abort(), timeout);
+        }
+        
         requestOptions.signal = controller.signal;
         
-        // リクエストを実行
-        logger.debug(`API ${method} リクエスト: ${url.split('?')[0]}`);
-        const response = await fetch(url, requestOptions);
-        
-        // タイムアウトをクリア
-        if (timeoutId) clearTimeout(timeoutId);
-        
-        // レスポンスがJSONでない場合を処理
-        if (response.headers.get('content-type')?.includes('application/json')) {
-          const responseData = await response.json();
+        try {
+          // リクエストを実行
+          logger.debug(`API ${method} リクエスト: ${url.split('?')[0]}`);
+          const response = await fetch(url, requestOptions);
           
-          // エラーレスポンスを処理
-          if (!response.ok) {
-            const errorMessage = responseData.detail || responseData.message || response.statusText;
-            throw new ApiError(
-              `APIエラー: ${errorMessage}`,
-              response.status,
-              JSON.stringify(responseData),
-              'server_error'
-            );
+          // タイムアウトをクリア
+          if (timeoutId) clearTimeout(timeoutId);
+          
+          // レスポンスがJSONでない場合を処理
+          if (response.headers.get('content-type')?.includes('application/json')) {
+            const responseData = await response.json();
+            
+            // エラーレスポンスを処理
+            if (!response.ok) {
+              const errorMessage = responseData.detail || responseData.message || response.statusText;
+              throw new ApiError(
+                `APIエラー: ${errorMessage}`,
+                response.status,
+                JSON.stringify(responseData),
+                'server_error'
+              );
+            }
+            
+            logger.debug(`API レスポンス成功: ${url.split('?')[0]}`);
+            return responseData;
+          } else {
+            // JSONでないレスポンスボディの読み込み
+            const text = await response.text();
+            
+            if (!response.ok) {
+              throw new ApiError(
+                `APIエラー: ${response.statusText}`,
+                response.status,
+                text,
+                'server_error'
+              );
+            }
+            
+            // 空のレスポンスを処理
+            return (text ? JSON.parse(text) : {}) as T;
           }
-          
-          logger.debug(`API レスポンス成功: ${url.split('?')[0]}`);
-          return responseData;
-        } else {
-          // JSONでないレスポンスボディの読み込み
-          const text = await response.text();
-          
-          if (!response.ok) {
-            throw new ApiError(
-              `APIエラー: ${response.statusText}`,
-              response.status,
-              text,
-              'server_error'
-            );
-          }
-          
-          // 空のレスポンスを処理
-          return (text ? JSON.parse(text) : {}) as T;
+        } finally {
+          // タイムアウトが設定されていたらクリア
+          if (timeoutId) clearTimeout(timeoutId);
         }
       } catch (error: any) {
-        // タイムアウトの確認
-        if (timeoutId) clearTimeout(timeoutId);
-        
         lastError = error;
         
         // 再試行可能なエラーか確認

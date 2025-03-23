@@ -4,7 +4,8 @@ import React, { useEffect } from 'react';
 import { Notification as NotificationType } from '@/app/lib/types';
 import { useNotification } from '@/app/contexts/NotificationContext';
 
-const Notification: React.FC = () => {
+// コンポーネントを名前付きエクスポートに変更
+export const Notification: React.FC = () => {
   const { notifications, removeNotification } = useNotification();
   
   useEffect(() => {
@@ -46,4 +47,5 @@ const Notification: React.FC = () => {
   );
 };
 
+// 後方互換性のためのデフォルトエクスポート
 export default Notification;

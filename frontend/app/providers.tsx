@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
 import { ApiProvider } from './contexts/ApiContext';
 import { NotificationProvider } from './contexts/NotificationContext';
-import Notification from './components/Notification';
+import { Notification } from './components/Notification'; // 名前付きインポートに修正
 import ErrorBoundary from './components/ErrorBoundary';
 
 // パフォーマンス計測

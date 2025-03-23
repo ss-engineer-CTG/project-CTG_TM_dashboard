@@ -2,7 +2,7 @@ import { apiClient } from './client';
 // 循環依存の修正のため削除
 // import { initializeApi } from './connection';
 import { ConnectionTestResult, HealthResponse } from './types';
-import { isClient, isElectronEnvironment, getApiInitialized, setApiInitialized, getCurrentApiPort, setCurrentApiPort } from './utils/environment';
+import { isClient, isElectronEnvironment, setApiInitialized, setCurrentApiPort } from './utils/environment';
 
 // パフォーマンス計測
 if (typeof window !== 'undefined') {
@@ -56,7 +56,7 @@ export const detectApiPort = async (): Promise<number | null> => {
       }
     }
   } catch (e) {
-    console.warn('ローカルストレージからのポート取得エラー:', e);
+    /* エラーを無視 */
   }
   
   // 3. 複数の候補ポートを並列チェック
@@ -81,7 +81,9 @@ export const detectApiPort = async (): Promise<number | null> => {
         const port = result.value.port;
         try {
           localStorage.setItem('api_port', port.toString());
-        } catch (e) {}
+        } catch (e) {
+          /* エラーを無視 */
+        }
         
         // パフォーマンスマーク - 並列検出成功
         if (typeof window !== 'undefined') {
@@ -102,7 +104,9 @@ export const detectApiPort = async (): Promise<number | null> => {
       if (await isPortAvailable(port, 2000)) { // タイムアウト延長：500ms→2000ms
         try {
           localStorage.setItem('api_port', port.toString());
-        } catch (e) {}
+        } catch (e) {
+          /* エラーを無視 */
+        }
         
         // パフォーマンスマーク - 順次検出成功
         if (typeof window !== 'undefined') {
@@ -275,7 +279,7 @@ export const rediscoverApiPort = async (): Promise<number | null> => {
     const ports = [8000, 8080, 8888, 8081, 8001, 3001, 5000];
     
     // 現在のポートを先頭に置くことで高速に検出できる可能性を上げる
-    const currentPort = getCurrentApiPort();
+    const currentPort = window.currentApiPort;
     if (currentPort && !ports.includes(currentPort)) {
       ports.unshift(currentPort);
     }
@@ -298,7 +302,7 @@ export const rediscoverApiPort = async (): Promise<number | null> => {
         try {
           localStorage.setItem('api_port', port.toString());
         } catch (e) {
-          console.warn('ローカルストレージへのポート保存エラー:', e);
+          /* エラーを無視 */
         }
         
         // パフォーマンスマーク - 成功
@@ -321,7 +325,9 @@ export const rediscoverApiPort = async (): Promise<number | null> => {
         
         try {
           localStorage.setItem('api_port', port.toString());
-        } catch (e) {}
+        } catch (e) {
+          /* エラーを無視 */
+        }
         
         // パフォーマンスマーク - 順次検出成功
         if (typeof window !== 'undefined') {

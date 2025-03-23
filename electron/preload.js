@@ -136,7 +136,13 @@ contextBridge.exposeInMainWorld('electron', {
     readFile: (path, options) => ipcRenderer.invoke('fs:readFile', path, options),
     writeFile: (filePath, data, options) => ipcRenderer.invoke('fs:writeFile', filePath, data, options),
     mkdir: (dirPath, options) => ipcRenderer.invoke('fs:mkdir', dirPath, options),
-    readdir: (dirPath, options) => ipcRenderer.invoke('fs:readdir', dirPath, options)
+    readdir: (dirPath, options) => ipcRenderer.invoke('fs:readdir', dirPath, options),
+    
+    // 追加: ファイル/フォルダを開く機能
+    openPath: (path) => ipcRenderer.invoke('fs:openPath', path),
+    
+    // 追加: パスの検証と正規化
+    validatePath: (path) => ipcRenderer.invoke('fs:validatePath', path)
   },
   
   // パス操作
@@ -161,7 +167,7 @@ contextBridge.exposeInMainWorld('electron', {
     }
   },
   
-  // テスト用のダイアログ関数
+  // テスト用のダイアログ関数 
   testDialog: () => {
     return ipcRenderer.invoke('dialog:test')
       .catch(err => {

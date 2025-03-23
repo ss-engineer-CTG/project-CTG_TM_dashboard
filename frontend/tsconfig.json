@@ -17,6 +17,7 @@
     "isolatedModules": true,
     "jsx": "preserve",
     "incremental": true,
+    "downlevelIteration": true,  // イテレーションの問題を解決するために追加
     "plugins": [
       {
         "name": "next"

@@ -94,6 +94,7 @@ export interface APIConnectionStatus {
   message: string;
   lastChecked: Date | null;
   details?: any;
+  reconnectAttempts: number; // 必須プロパティに変更
 }
 
 // APIエラーの型定義

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, session, shell } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const isDev = require('electron-is-dev');
@@ -1019,6 +1019,80 @@ ipcMain.handle('fs:mkdir', async (_, dirPath, options) => {
 
 ipcMain.handle('fs:readdir', async (_, dirPath, options) => {
   return fs.readdirSync(dirPath, options);
+});
+
+// 追加：ファイル/フォルダを開くためのIPC
+ipcMain.handle('fs:openPath', async (_, pathToOpen) => {
+  try {
+    // パスが存在するか確認
+    if (!fs.existsSync(pathToOpen)) {
+      return {
+        success: false,
+        message: `パスが見つかりません: ${pathToOpen}`,
+        error: 'NOT_FOUND'
+      };
+    }
+    
+    // shell.openPathを使用してファイル/フォルダを開く
+    const result = await shell.openPath(pathToOpen);
+    
+    // エラーがあるかチェック (空の文字列はエラーなし)
+    if (result === '') {
+      return {
+        success: true,
+        message: `パスを正常に開きました: ${pathToOpen}`,
+        path: pathToOpen
+      };
+    } else {
+      // エラーメッセージがある場合
+      return {
+        success: false,
+        message: `パスを開けませんでした: ${result}`,
+        error: 'OPEN_ERROR',
+        path: pathToOpen
+      };
+    }
+  } catch (error) {
+    console.error('ファイル/フォルダを開く際のエラー:', error);
+    return {
+      success: false,
+      message: `エラーが発生しました: ${error.message}`,
+      error: 'EXCEPTION',
+      path: pathToOpen
+    };
+  }
+});
+
+// パス正規化と検証のためのIPC
+ipcMain.handle('fs:validatePath', async (_, inputPath) => {
+  try {
+    // パスの正規化
+    const normalizedPath = path.normalize(inputPath);
+    
+    // 存在確認
+    const exists = fs.existsSync(normalizedPath);
+    
+    // ファイルタイプの確認 (ファイルかディレクトリか)
+    let type = 'unknown';
+    if (exists) {
+      const stats = fs.statSync(normalizedPath);
+      type = stats.isDirectory() ? 'directory' : 'file';
+    }
+    
+    return {
+      success: true,
+      normalizedPath,
+      exists,
+      type
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: `パスの検証に失敗しました: ${error.message}`,
+      error: 'VALIDATION_ERROR',
+      inputPath
+    };
+  }
 });
 
 // パス操作のIPC

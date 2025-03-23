@@ -22,9 +22,13 @@ const persistData = (key: string, data: any) => {
       try {
         localStorage.setItem(`dashboard_${key}_timestamp`, Date.now().toString());
         localStorage.setItem(`dashboard_${key}`, JSON.stringify(data));
-      } catch (e) {}
+      } catch (e) {
+        /* エラーを無視 */
+      }
     }, 0);
-  } catch (e) {}
+  } catch (e) {
+    /* エラーを無視 */
+  }
 };
 
 // 保存データのロード関数 - 最適化版
@@ -237,7 +241,7 @@ export const useProjects = (filePath: string | null) => {
     }
   }, [filePath, fetchData, addNotification, error]);
 
-  // ファイルを開く関数 - 最適化版
+  // ファイルを開く関数 - エラーハンドリング強化
   const handleOpenFile = useCallback(async (path: string) => {
     if (!isClient || !isMounted.current) return;
     
@@ -247,14 +251,35 @@ export const useProjects = (filePath: string | null) => {
     }
     
     try {
+      // パスの種類を識別するための正規表現
+      const isDirectory = /[/\\]$/.test(path) || !path.includes('.');
+      const openingType = isDirectory ? 'フォルダ' : 'ファイル';
+      
+      // 処理中の通知
+      addNotification(`${openingType}を開いています...`, 'info');
+      
       const response = await openFile(path);
       
       if (!isMounted.current) return;
       
       if (response.success) {
-        addNotification('ファイルを開きました', 'success');
+        // 成功時の通知をファイルタイプに応じて変更
+        addNotification(
+          isDirectory ? 'フォルダを開きました' : 'ファイルを開きました', 
+          'success'
+        );
       } else {
-        addNotification(response.message || 'ファイルを開けませんでした', 'error');
+        // エラーメッセージの詳細化
+        let errorMsg = response.message || `${openingType}を開けませんでした`;
+        
+        // 詳細なエラーメッセージを追加
+        if (errorMsg.includes('見つかりません') || errorMsg.includes('not found')) {
+          errorMsg = `${openingType}が見つかりません: ${path}`;
+        } else if (errorMsg.includes('permission') || errorMsg.includes('アクセス')) {
+          errorMsg = `${openingType}へのアクセス権限がありません: ${path}`;
+        }
+        
+        addNotification(errorMsg, 'error');
       }
       
       // パフォーマンスマーク - 成功

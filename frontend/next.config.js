@@ -11,24 +11,22 @@ const nextConfig = {
     },
   } : {}),
   
-  // 開発環境でのAPI通信用プロキシ設定
+  // 静的出力時はリライトを完全に無効化
   async rewrites() {
-    // 開発環境でのみリライトを有効化
-    return process.env.NODE_ENV === 'development'
-      ? [
-          {
-            source: '/api/:path*',
-            destination: 'http://127.0.0.1:8000/api/:path*', // FastAPIバックエンドへのプロキシ
-          },
-        ]
-      : [];
+    if (process.env.NODE_ENV === 'production') {
+      return [];
+    }
+    
+    return [
+      {
+        source: '/api/:path*',
+        destination: 'http://127.0.0.1:8000/api/:path*', // FastAPIバックエンドへのプロキシ
+      },
+    ];
   },
   
   // 出力ディレクトリを指定 - Electronとの統一
   distDir: 'out',
-  
-  // publicディレクトリの指定
-  assetPrefix: '',
 }
 
 module.exports = nextConfig

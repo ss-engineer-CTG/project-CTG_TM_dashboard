@@ -24,7 +24,8 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     connected: false,
     loading: true,
     message: 'API接続確認中...',
-    lastChecked: null
+    lastChecked: null,
+    reconnectAttempts: 0  // 必須プロパティとして追加
   });
   const [reconnectAttempts, setReconnectAttempts] = useState<number>(0);
   const { addNotification } = useNotification();
@@ -92,7 +93,8 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           loading: false,
           message: result.message || 'APIサーバーに接続しました',
           lastChecked: new Date(),
-          details: result.details
+          details: result.details,
+          reconnectAttempts: 0 // 初期化
         });
         
         if (reconnectAttempts > 0) {
@@ -105,15 +107,18 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       
       // 接続失敗
+      const newReconnectAttempts = reconnectAttempts + 1;
+      setReconnectAttempts(newReconnectAttempts);
+      
       setStatus({
         connected: false,
         loading: false,
         message: result.message || 'APIサーバーへの接続に失敗しました',
         lastChecked: new Date(),
-        details: result.details
+        details: result.details,
+        reconnectAttempts: newReconnectAttempts
       });
       
-      setReconnectAttempts(prev => prev + 1);
       if (reconnectAttempts < 3) {
         addNotification(result.message || 'APIサーバーへの接続に失敗しました', 'error');
       }
@@ -127,14 +132,17 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       
       // エラー処理
+      const newReconnectAttempts = reconnectAttempts + 1;
+      setReconnectAttempts(newReconnectAttempts);
+      
       setStatus({
         connected: false,
         loading: false,
         message: `APIサーバーへの接続中にエラーが発生しました: ${error.message}`,
-        lastChecked: new Date()
+        lastChecked: new Date(),
+        reconnectAttempts: newReconnectAttempts
       });
       
-      setReconnectAttempts(prev => prev + 1);
       if (reconnectAttempts < 3) {
         addNotification('APIサーバーへの接続に失敗しました', 'error');
       }
@@ -159,7 +167,8 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ...prev, 
           loading: false, 
           connected: false,
-          message: 'APIポート再検出に失敗しました'
+          message: 'APIポート再検出に失敗しました',
+          reconnectAttempts: prev.reconnectAttempts
         }));
         return false;
       }
@@ -172,7 +181,8 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ...prev, 
           loading: false, 
           connected: false,
-          message: `接続リセット中にエラーが発生しました: ${error.message}`
+          message: `接続リセット中にエラーが発生しました: ${error.message}`,
+          reconnectAttempts: prev.reconnectAttempts
         }));
       }
       return false;
@@ -192,7 +202,8 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setStatus(prev => ({
           ...prev,
           loading: false,
-          message: 'API接続タイムアウト。再試行してください。'
+          message: 'API接続タイムアウト。再試行してください。',
+          reconnectAttempts: prev.reconnectAttempts
         }));
       }
     }, 15000); // 15秒タイムアウト

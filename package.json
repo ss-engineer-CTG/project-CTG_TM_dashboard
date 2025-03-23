@@ -1,6 +1,8 @@
 {
   "name": "project-dashboard",
   "version": "0.1.0",
+  "description": "プロジェクト管理ダッシュボードアプリケーション",
+  "author": "Your Name <your-email@example.com>",
   "private": true,
   "main": "electron/main.js",
   "scripts": {

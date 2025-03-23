@@ -70,8 +70,8 @@ const withApiInitialized = async <T>(fn: () => Promise<T>, cacheKey?: string, ca
     
     // キャッシュサイズの管理（最大50エントリに制限）
     if (requestCache.size > 50) {
-      // 最も古いエントリを削除
-      const oldestKey = [...requestCache.entries()]
+      // 最も古いエントリを削除 - イテレーションの修正
+      const oldestKey = Array.from(requestCache.entries())
         .sort(([, a], [, b]) => a.timestamp - b.timestamp)[0][0];
       requestCache.delete(oldestKey);
     }
@@ -212,38 +212,58 @@ export const getDefaultPath = async (): Promise<FileResponse> => {
         success: false,
         message: error.isApiError 
           ? `デフォルトパス取得エラー: ${error.details}` 
-          : `デフォルトパス取得中に予期しないエラーが発生しました: ${error.message}`,
-        path: null
+          : `デフォルトパス取得中に予期しないエラーが発生しました: ${error.message}`
       };
     }
   }, 'default_path', 10000); // 10秒キャッシュ
 };
 
-// ファイルを開く - 最適化版
+// ファイルを開く - 最適化版（Electron対応）
 export const openFile = async (path: string): Promise<FileResponse> => {
   return withApiInitialized(async () => {
     try {
       logger.debug(`ファイルを開く: ${path}`);
       
       // Electron環境の場合は直接ファイルを開く
-      if (isElectronEnvironment() && window.electron?.fs?.exists) {
+      if (isElectronEnvironment() && window.electron?.fs) {
         try {
-          const exists = await window.electron.fs.exists(path);
-          if (exists) {
-            // OSの標準機能でファイルを開く
-            await window.electron.testDialog();
+          // パスの検証
+          const validation = await window.electron.fs.validatePath(path);
+          
+          // パスが存在しない場合
+          if (!validation.exists) {
+            return {
+              success: false,
+              message: `ファイルが見つかりません: ${path}`,
+              path
+            };
+          }
+          
+          // ファイルまたはフォルダを開く
+          const result = await window.electron.fs.openPath(path);
+          
+          if (result.success) {
             return {
               success: true,
-              message: `ファイルを開きました: ${path}`,
-              path: path
+              message: validation.type === 'directory' ? 
+                `フォルダを開きました: ${path}` : 
+                `ファイルを開きました: ${path}`,
+              path
+            };
+          } else {
+            return {
+              success: false,
+              message: `${validation.type === 'directory' ? 'フォルダ' : 'ファイル'}を開けませんでした: ${result.message || '不明なエラー'}`,
+              path
             };
           }
         } catch (e) {
-          logger.debug('Electronでのファイルオープンに失敗、APIにフォールバック');
+          logger.error(`Electronでのファイルオープンエラー: ${e instanceof Error ? e.message : 'Unknown error'}`);
+          // APIにフォールバック
         }
       }
       
-      // API経由でファイルを開く
+      // API経由でファイルを開く (ブラウザ環境またはElectronが失敗した場合)
       const data = await apiClient.post<FileResponse>('/files/open', { path }, undefined, { timeout: 8000 });
       return data;
     } catch (error: any) {
@@ -254,8 +274,7 @@ export const openFile = async (path: string): Promise<FileResponse> => {
         success: false,
         message: error.isApiError
           ? `ファイルを開くエラー: ${error.details}`
-          : `ファイルを開く際に予期しないエラーが発生しました: ${error.message}`,
-        path: null
+          : `ファイルを開く際に予期しないエラーが発生しました: ${error.message}`
       };
     }
   });
@@ -273,9 +292,13 @@ export const selectFile = async (initialPath?: string): Promise<FileResponse> =>
           // Electron経由でファイル選択
           logger.info('Electron経由でCSVファイル選択を実行');
           const result = await window.electron.dialog.openCSVFile(initialPath || '');
-          return result;
+          return {
+            success: result.success,
+            message: result.message,
+            path: result.path || undefined
+          };
         } catch (dialogError) {
-          logger.warn(`Electronダイアログエラー: ${dialogError.message}`);
+          logger.warn(`Electronダイアログエラー: ${dialogError instanceof Error ? dialogError.message : String(dialogError)}`);
         }
       }
       
@@ -292,8 +315,7 @@ export const selectFile = async (initialPath?: string): Promise<FileResponse> =>
         success: false,
         message: error.isApiError
           ? `ファイル選択エラー: ${error.details}`
-          : `ファイル選択中に予期しないエラーが発生しました: ${error.message}`,
-        path: null
+          : `ファイル選択中に予期しないエラーが発生しました: ${error.message}`
       };
     }
   });
@@ -325,4 +347,3 @@ if (typeof window !== 'undefined') {
 }
 
 export * from './client';
-// connection.tsを削除したので、このエクスポートは不要

@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { usePathname } from 'next/navigation';
 import { useApi } from '@/app/contexts/ApiContext';
 import { isClient } from '@/app/lib/utils/environment';
 
@@ -12,7 +11,7 @@ interface EnhancedAPIStatusProps {
 const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [countdown, setCountdown] = useState(0);
-  const [debugInfo, setDebugInfo] = useState<any>(null);
+  const [debugInfo, setDebugInfo] = useState<Record<string, unknown>>({});
   const [showDebug, setShowDebug] = useState(false);
   
   // APIコンテキストから状態を取得
@@ -23,7 +22,7 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
     if (!isClient || apiStatus.connected || apiStatus.reconnectAttempts === 0) return;
     
     const collectDebugInfo = async () => {
-      const info: any = {};
+      const info: Record<string, unknown> = {};
       
       // Electron情報
       if (window.electron) {
@@ -34,7 +33,7 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
         try {
           info.apiBaseUrl = await window.electron.getApiBaseUrl();
         } catch (e) {
-          info.apiBaseUrlError = e.message;
+          info.apiBaseUrlError = e instanceof Error ? e.message : String(e);
         }
       } else {
         info.isElectron = false;
@@ -110,17 +109,19 @@ const EnhancedAPIStatus: React.FC<EnhancedAPIStatusProps> = ({ onRetry }) => {
   }, [isReconnecting, checkConnection, onRetry]);
   
   // 修正: 接続済みの場合は簡略表示、タイムアウトを設定して再確認
-  if (apiStatus.connected && !apiStatus.loading) {
-    // 追加: 念のため30秒後に接続を再確認
-    useEffect(() => {
+  useEffect(() => {
+    if (apiStatus.connected && !apiStatus.loading) {
+      // 追加: 念のため30秒後に接続を再確認
       const timer = setTimeout(() => {
         // 静かに再確認
         checkConnection(0).catch(() => {});
       }, 30000);
       
       return () => clearTimeout(timer);
-    }, [checkConnection]);
-    
+    }
+  }, [apiStatus.connected, apiStatus.loading, checkConnection]);
+  
+  if (apiStatus.connected && !apiStatus.loading) {
     return (
       <div className="mb-4 flex items-center text-xs text-green-500">
         <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>

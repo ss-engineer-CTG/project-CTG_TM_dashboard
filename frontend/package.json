@@ -9,25 +9,27 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "next": "^14.0.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-query": "^3.39.3",
-    "chart.js": "^4.0.0",
-    "react-chartjs-2": "^5.0.0",
-    "uuid": "^9.0.1",
-    "date-fns": "^2.30.0",
-    "axios": "^1.6.2",
-    "tailwindcss": "^3.3.0",
     "@types/node": "^18.0.0",
     "@types/react": "^18.0.0",
-    "@types/react-dom": "^18.0.0"
+    "@types/react-dom": "^18.0.0",
+    "axios": "^1.6.2",
+    "chart.js": "^4.0.0",
+    "date-fns": "^2.30.0",
+    "next": "^14.0.0",
+    "react": "^18.2.0",
+    "react-chartjs-2": "^5.0.0",
+    "react-dom": "^18.2.0",
+    "react-query": "^3.39.3",
+    "tailwindcss": "^3.3.0",
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
-    "typescript": "^5.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.27.0",
+    "@typescript-eslint/parser": "^8.27.0",
     "autoprefixer": "^10.0.0",
-    "postcss": "^8.0.0",
     "eslint": "^8.0.0",
-    "eslint-config-next": "^14.0.0"
+    "eslint-config-next": "^14.0.0",
+    "postcss": "^8.0.0",
+    "typescript": "^5.0.0"
   }
 }

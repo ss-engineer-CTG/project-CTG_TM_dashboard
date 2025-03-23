@@ -1,7 +1,7 @@
 // api-init.ts - APIクライアントの初期化と接続管理の統合モジュール
 import { apiClient } from './client';
 import { ConnectionTestResult, HealthResponse } from './types';
-import { isClient, getApiInitialized, setApiInitialized, getCurrentApiPort, setCurrentApiPort } from './utils/environment';
+import { isClient, getApiInitialized, setApiInitialized, setCurrentApiPort } from './utils/environment';
 
 // パフォーマンス計測
 if (typeof window !== 'undefined') {
@@ -94,7 +94,9 @@ export const detectApiPort = async (): Promise<number | null> => {
         const port = result.value.port;
         try {
           localStorage.setItem('api_port', port.toString());
-        } catch (e) {}
+        } catch (e) {
+          /* エラーを無視 */
+        }
         
         logger.info(`利用可能なポート${port}を検出しました`);
         return port;
@@ -113,7 +115,9 @@ export const detectApiPort = async (): Promise<number | null> => {
       if (await isPortAvailable(port, 2000)) {
         try {
           localStorage.setItem('api_port', port.toString());
-        } catch (e) {}
+        } catch (e) {
+          /* エラーを無視 */
+        }
         
         logger.info(`順次検出でポート${port}を検出しました`);
         return port;
@@ -266,25 +270,31 @@ export const initializeApi = async (): Promise<boolean> => {
   }
   
   // 初期化処理の実行と結果キャッシュ
-  apiInitializationPromise = new Promise<boolean>(async (resolve) => {
-    try {
-      if (getApiInitialized()) {
-        logger.debug('APIが既に初期化済みです');
-        resolve(true);
-        return;
+  apiInitializationPromise = new Promise<boolean>((resolve) => {
+    // 内部で非同期関数を作成して呼び出す
+    const initAsync = async () => {
+      try {
+        if (getApiInitialized()) {
+          logger.debug('APIが既に初期化済みです');
+          resolve(true);
+          return;
+        }
+        
+        // 接続試行
+        const result = await testApiConnection();
+        setApiInitialized(result.success);
+        
+        logger.info(`API初期化${result.success ? '成功' : '失敗'}: ${result.message}`);
+        resolve(result.success);
+      } catch (e) {
+        logger.error(`API初期化エラー: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        setApiInitialized(false);
+        resolve(false);
       }
-      
-      // 接続試行
-      const result = await testApiConnection();
-      setApiInitialized(result.success);
-      
-      logger.info(`API初期化${result.success ? '成功' : '失敗'}: ${result.message}`);
-      resolve(result.success);
-    } catch (e) {
-      logger.error(`API初期化エラー: ${e instanceof Error ? e.message : 'Unknown error'}`);
-      setApiInitialized(false);
-      resolve(false);
-    }
+    };
+    
+    // 非同期関数を呼び出す
+    initAsync();
   });
   
   return apiInitializationPromise;

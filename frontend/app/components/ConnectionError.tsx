@@ -42,7 +42,7 @@ const ConnectionError: React.FC<ConnectionErrorProps> = ({
           });
         } catch (e) {
           setDiagnosticInfo({
-            error: e.message,
+            error: e instanceof Error ? e.message : String(e),
             timestamp: Date.now()
           });
         }
