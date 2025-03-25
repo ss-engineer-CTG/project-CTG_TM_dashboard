@@ -1,6 +1,8 @@
 {
   "name": "project-dashboard",
   "version": "0.1.0",
+  "description": "プロジェクト管理ダッシュボードアプリケーション",
+  "author": "Your Name <your-email@example.com>",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -8,9 +10,11 @@
     "build": "cd frontend && npm run build",
     "start": "cd frontend && npm run start",
     "lint": "cd frontend && npm run lint",
-    "electron-dev": "concurrently \"npm run dev\" \"electron .\"",
+    "electron-dev": "npm run build && concurrently \"cd frontend && npm run dev\" \"electron .\"",
+    "electron-dev:quick": "electron .",
+    "prebuild": "rimraf out",
     "electron-pack": "npm run build && electron-builder",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps && cd frontend && npm install"
   },
   "dependencies": {
     "axios": "^1.6.2",
@@ -24,7 +28,8 @@
   "devDependencies": {
     "concurrently": "^8.2.2",
     "electron": "^28.3.3",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "rimraf": "^3.0.2"
   },
   "build": {
     "appId": "com.company.project-dashboard",
@@ -34,7 +39,7 @@
     },
     "files": [
       "electron/**/*",
-      "frontend/out/**/*",
+      "out/**/*",
       "package.json"
     ],
     "extraResources": [

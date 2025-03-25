@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>アプリケーションを起動中...</title>
+  <style>
+    body {
+      background-color: #1a1a1a;
+      color: white;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      overflow: hidden;
+      user-select: none;
+    }
+    
+    .logo {
+      width: 120px;
+      height: 120px;
+      margin-bottom: 20px;
+      animation: pulse 2s infinite;
+    }
+    
+    .progress-container {
+      width: 300px;
+      height: 4px;
+      background-color: #333;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 20px 0;
+    }
+    
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background-color: #60cdff;
+      transition: width 0.3s ease;
+    }
+    
+    .status-text {
+      font-size: 14px;
+      color: #b3b3b3;
+      margin-top: 10px;
+      min-height: 20px;
+    }
+    
+    @keyframes pulse {
+      0% { opacity: 0.6; }
+      50% { opacity: 1; }
+      100% { opacity: 0.6; }
+    }
+  </style>
+</head>
+<body>
+  <div class="logo">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="100%" height="100%" fill="#60cdff">
+      <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/>
+    </svg>
+  </div>
+  <h2>Project Dashboard</h2>
+  <div class="progress-container">
+    <div id="progress-bar" class="progress-bar"></div>
+  </div>
+  <div id="status-text" class="status-text">アプリケーションを起動中...</div>
+  
+  <script>
+    // IPCイベントを受信して進捗を更新
+    const { ipcRenderer } = require('electron');
+    
+    // ビルド進捗を表示
+    ipcRenderer.on('build-progress', (event, data) => {
+      document.getElementById('progress-bar').style.width = `${data.progress}%`;
+      document.getElementById('status-text').textContent = data.message;
+    });
+    
+    // 起動進捗を表示
+    ipcRenderer.on('startup-progress', (event, data) => {
+      document.getElementById('progress-bar').style.width = `${data.progress}%`;
+      document.getElementById('status-text').textContent = data.message;
+    });
+  </script>
+</body>
+</html>

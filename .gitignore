@@ -2,12 +2,13 @@
 frontend/node_modules
 /.pnp
 .pnp.js
+.next
 
 # testing
 /coverage
 
 # next.js
-/.next/
+frontend/.next/
 frontend/out/
 
 # production

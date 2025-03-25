@@ -1,32 +1,18 @@
 /**
- * 環境検出ユーティリティ
+ * 環境検出ユーティリティ - 簡素化版
  * アプリケーション全体で一貫した環境検出ロジックを提供します
  */
 
-// クライアントサイドかどうかを判定（window オブジェクトの存在で判定）
+// クライアントサイドかどうかを判定
 export const isClient = typeof window !== 'undefined';
 
 /**
  * Electron環境かどうかを判定
- * クライアントサイドでのみ動作し、window.electron オブジェクトの存在を確認
+ * クライアントサイドでのみ動作
  */
 export const isElectronEnvironment = (): boolean => {
   if (!isClient) return false;
-  
-  const result = isClient && 
-         typeof window !== 'undefined' && 
-         typeof window.electron !== 'undefined' && 
-         window.electron !== null;
-         
-  // デバッグログ追加
-  console.log('isElectronEnvironment 検出結果:', result, {
-    isClient,
-    windowDefined: typeof window !== 'undefined',
-    electronDefined: typeof window !== 'undefined' && typeof window.electron !== 'undefined',
-    electronProperties: typeof window !== 'undefined' && window.electron ? Object.keys(window.electron) : []
-  });
-  
-  return result;
+  return typeof window.electron !== 'undefined' && window.electron !== null;
 };
 
 /**

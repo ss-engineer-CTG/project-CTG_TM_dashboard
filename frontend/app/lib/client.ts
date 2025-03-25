@@ -1,131 +1,180 @@
-import axios, { AxiosInstance, AxiosError } from 'axios';
-import { APIError } from './types';
-import { isClient, isElectronEnvironment } from './utils/environment';
+/**
+ * HTTPクライアント
+ * - IPC通信を使用してAPIリクエストを処理
+ * - レスポンスの処理
+ * - エラーハンドリング
+ */
 
-class ApiClient {
-  private client: AxiosInstance;
-  private baseUrl: string = '/api';
+// コードサイズ削減のための型定義
+type QueryParams = Record<string, any>;
+type RequestOptions = { timeout?: number; headers?: Record<string, string> };
 
-  constructor() {
-    this.client = axios.create({
-      baseURL: this.baseUrl,
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      timeout: 10000,
-    });
+// カスタムAPIエラー型を定義
+class ApiError extends Error {
+  status: number;
+  details: string;
+  isApiError: boolean;
+  type: 'server_error' | 'network_error' | 'timeout_error' | 'unknown_error';
 
-    this.setupInterceptors();
-  }
-
-  public getBaseUrl(): string {
-    return this.baseUrl;
-  }
-
-  public setBaseUrl(url: string) {
-    this.baseUrl = url;
-    this.client.defaults.baseURL = url;
-    
-    if (isClient) {
-      try {
-        localStorage.setItem('api_base_url', url);
-      } catch (e) {
-        console.warn('Failed to save API URL to localStorage', e);
-      }
-    }
-  }
-
-  private setupInterceptors() {
-    // リクエストインターセプター
-    this.client.interceptors.request.use(
-      (config) => {
-        const fullUrl = `${config.baseURL}${config.url}${config.params ? `?${new URLSearchParams(config.params).toString()}` : ''}`;
-        console.log(`🚀 リクエスト送信: ${config.method?.toUpperCase()} ${fullUrl}`);
-        return config;
-      },
-      (error) => {
-        console.error('❌ リクエスト作成エラー:', error);
-        return Promise.reject(error);
-      }
-    );
-
-    // レスポンスインターセプター
-    this.client.interceptors.response.use(
-      (response) => {
-        console.log(`✅ レスポンス受信: ${response.config.method?.toUpperCase()} ${response.config.url}`, 
-                   { status: response.status, statusText: response.statusText });
-        return response;
-      },
-      (error: AxiosError) => {
-        if (error.code === 'ECONNABORTED') {
-          console.error('⏱️ リクエストタイムアウト:', {
-            url: error.config?.url,
-            timeout: error.config?.timeout,
-            message: 'サーバーからの応答がタイムアウトしました。サーバーが起動しているか確認してください。'
-          });
-        } else if (error.code === 'ERR_NETWORK') {
-          console.error('🌐 ネットワークエラー:', {
-            url: error.config?.url,
-            message: 'ネットワーク接続エラー。サーバーが起動しているか確認してください。'
-          });
-        } else if (error.response) {
-          console.error('🔴 サーバーエラー:', {
-            status: error.response.status,
-            statusText: error.response.statusText,
-            data: error.response.data,
-            url: error.config?.url
-          });
-        } else if (error.request) {
-          console.error('📭 レスポンスなし:', {
-            message: 'サーバーからの応答がありません。サーバーが起動しているか確認してください。',
-            url: error.config?.url,
-          });
-        } else {
-          console.error('❓ 予期しないエラー:', error.message);
-        }
-        
-        // 標準化されたエラーオブジェクトを生成
-        const apiError: APIError = {
-          name: error.name,
-          message: error.message || 'APIエラーが発生しました',
-          type: this.getErrorType(error),
-          details: error.response?.data?.detail || error.message || '不明なエラー',
-          status: error.response?.status,
-          isApiError: true,
-        };
-        
-        return Promise.reject(apiError);
-      }
-    );
-  }
-
-  private getErrorType(error: AxiosError): string {
-    if (error.code === 'ECONNABORTED') return 'timeout_error';
-    if (error.code === 'ERR_NETWORK') return 'network_error';
-    if (error.response) return 'server_error';
-    return 'unknown_error';
-  }
-
-  async get<T>(url: string, params?: any): Promise<T> {
-    const response = await this.client.get<T>(url, { params });
-    return response.data;
-  }
-
-  async post<T>(url: string, data?: any): Promise<T> {
-    const response = await this.client.post<T>(url, data);
-    return response.data;
-  }
-
-  async postFormData<T>(url: string, formData: FormData): Promise<T> {
-    const response = await this.client.post<T>(url, formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
-    });
-    return response.data;
+  constructor(message: string, status: number = 0, details: string = '', type: 'server_error' | 'network_error' | 'timeout_error' | 'unknown_error' = 'unknown_error') {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.details = details;
+    this.isApiError = true;
+    this.type = type;
   }
 }
 
-// シングルトンインスタンスをエクスポート
-export const apiClient = new ApiClient();
+// APIクライアントクラス
+class ApiClient {
+  private baseUrl: string;
+  private requestTimeout: number;
+  private requestCache: Map<string, { data: any, timestamp: number, ttl: number }>;
+  
+  constructor(baseUrl: string = '', timeout: number = 10000) {
+    this.baseUrl = baseUrl;
+    this.requestTimeout = timeout;
+    this.requestCache = new Map();
+  }
+
+  // ベースURLを設定
+  setBaseUrl(url: string): void {
+    this.baseUrl = url;
+    console.log(`API Base URL設定: ${url}`);
+  }
+
+  // タイムアウトを設定
+  setTimeout(timeout: number): void {
+    this.requestTimeout = timeout;
+  }
+
+  // キャッシュのクリア
+  clearCache(): void {
+    this.requestCache.clear();
+    console.log('APIキャッシュをクリア');
+  }
+
+  // Electron環境かどうかをチェック
+  private isElectronEnvironment(): boolean {
+    return typeof window !== 'undefined' && !!window.electron?.api;
+  }
+
+  // HTTPリクエストを送信
+  private async request<T>(
+    method: string,
+    endpoint: string,
+    params?: QueryParams,
+    data?: any,
+    options: RequestOptions = {}
+  ): Promise<T> {
+    // Electron環境でない場合はエラー
+    if (!this.isElectronEnvironment()) {
+      throw new ApiError(
+        'Electron環境外ではAPIリクエストを実行できません',
+        0,
+        'Electron環境ではありません',
+        'network_error'
+      );
+    }
+    
+    // 追加のチェック - TypeScriptの型チェックを満たすため
+    if (!window.electron || !window.electron.api) {
+      throw new ApiError(
+        'Electron APIが利用できません',
+        0,
+        'Electron APIが見つかりません',
+        'network_error'
+      );
+    }
+    
+    const { timeout = this.requestTimeout } = options;
+    
+    try {
+      // Electron APIブリッジ経由でリクエスト実行
+      const result = await window.electron.api.request(
+        method,
+        endpoint,
+        params,
+        data,
+        { timeout, ...options }
+      );
+      
+      return result as T;
+    } catch (error: any) {
+      // エラーが適切にフォーマットされていることを確認
+      const apiError = new ApiError(
+        error.message || 'APIリクエストエラー',
+        error.status || 0,
+        error.details || '',
+        error.type || 'unknown_error'
+      );
+      
+      throw apiError;
+    }
+  }
+
+  // キャッシュを使用した高速化されたGETリクエスト
+  async get<T>(endpoint: string, params?: QueryParams, options: RequestOptions = {}, cacheTTL: number = 0): Promise<T> {
+    // キャッシュキーの生成
+    const cacheKey = this.generateCacheKey(endpoint, params);
+    
+    // キャッシュが有効な場合はキャッシュをチェック
+    if (cacheTTL > 0) {
+      const cachedItem = this.requestCache.get(cacheKey);
+      if (cachedItem && Date.now() - cachedItem.timestamp < cachedItem.ttl) {
+        return cachedItem.data;
+      }
+    }
+    
+    // リクエスト実行
+    const data = await this.request<T>('GET', endpoint, params, undefined, options);
+    
+    // 結果をキャッシュ
+    if (cacheTTL > 0) {
+      this.requestCache.set(cacheKey, { 
+        data, 
+        timestamp: Date.now(), 
+        ttl: cacheTTL 
+      });
+    }
+    
+    return data;
+  }
+
+  // POSTリクエスト
+  async post<T>(endpoint: string, data?: any, params?: QueryParams, options: RequestOptions = {}): Promise<T> {
+    return this.request<T>('POST', endpoint, params, data, options);
+  }
+
+  // PUTリクエスト
+  async put<T>(endpoint: string, data?: any, params?: QueryParams, options: RequestOptions = {}): Promise<T> {
+    return this.request<T>('PUT', endpoint, params, data, options);
+  }
+
+  // DELETEリクエスト
+  async delete<T>(endpoint: string, params?: QueryParams, options: RequestOptions = {}): Promise<T> {
+    return this.request<T>('DELETE', endpoint, params, undefined, options);
+  }
+
+  // キャッシュキーを生成
+  private generateCacheKey(endpoint: string, params?: QueryParams): string {
+    let key = endpoint;
+    
+    if (params) {
+      const paramPairs = Object.entries(params)
+        .filter(([_, value]) => value !== undefined && value !== null)
+        .map(([key, value]) => `${key}=${String(value)}`)
+        .sort();
+      
+      if (paramPairs.length > 0) {
+        key += '?' + paramPairs.join('&');
+      }
+    }
+    
+    return key;
+  }
+}
+
+// シングルトンインスタンスを作成
+export const apiClient = new ApiClient('', 10000);

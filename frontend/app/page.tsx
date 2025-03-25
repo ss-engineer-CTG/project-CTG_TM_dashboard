@@ -1,63 +1,31 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, useCallback, lazy } from 'react';
 import { useProjects } from './hooks/useProjects';
 import Header from './components/Header';
 import MetricsCards from './components/MetricsCards';
 import ProjectTable from './components/ProjectTable';
-import ProgressChart from './components/ProgressChart';
-import DurationChart from './components/DurationChart';
-import ConnectionError from './components/ConnectionError';
 import ErrorMessage from './components/ErrorMessage';
-import EnhancedAPIStatus from './components/EnhancedAPIStatus';
-import ClientInfo from './components/ClientInfo';
-import { getDefaultPath, testApiConnection } from './lib/services';
+import { getDefaultPath } from './lib/services';
 import { useNotification } from './contexts/NotificationContext';
 import { useApi } from './contexts/ApiContext';
-import { isClient } from './lib/utils/environment';
 
-// Electron UI初期化用のカスタムフック
-const useElectronInitialization = () => {
-  const [isElectronReady, setIsElectronReady] = useState(false);
+// 遅延ロードするコンポーネント
+const DashboardCharts = lazy(() => import('./components/DashboardCharts'));
 
-  useEffect(() => {
-    // 既にElectron APIが利用可能かチェック
-    if (isClient && window.electron) {
-      setIsElectronReady(true);
-      window.electronReady = true;
-    } else {
-      // Electron APIが利用可能になるのを待つイベントリスナー
-      const handleElectronReady = () => {
-        setIsElectronReady(true);
-        window.electronReady = true;
-      };
-      
-      document.addEventListener('electron-ready', handleElectronReady);
-      
-      return () => {
-        document.removeEventListener('electron-ready', handleElectronReady);
-      };
-    }
-  }, []);
-
-  return { isElectronReady };
-};
+// クライアントサイドかどうかをチェック
+const isClient = typeof window !== 'undefined';
 
 export default function Home() {
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const [initError, setInitError] = useState<{message: string, details?: any} | null>(null);
-  const [connectionAttempts, setConnectionAttempts] = useState<number>(0);
-  const [triedPorts, setTriedPorts] = useState<number[]>([]);
   const { addNotification } = useNotification();
   
-  // Electron初期化状態を取得
-  const { isElectronReady } = useElectronInitialization();
-  
   // APIコンテキストから状態を取得
-  const { status: apiStatus, reconnectAttempts, checkConnection: checkApiConnection } = useApi();
+  const { status: apiStatus, checkConnection } = useApi();
 
-  // カスタムフックから状態と関数を取得
+  // カスタムフックからプロジェクト状態と関数を取得
   const { 
     projects, 
     metrics, 
@@ -67,57 +35,93 @@ export default function Home() {
     openFile 
   } = useProjects(selectedFilePath);
 
-  // 初回レンダリング時にAPIの健全性をチェックしてデフォルトのファイルパスを取得
+  // 初回マウント時にデフォルトファイルパスを取得
   useEffect(() => {
+    // マウント状態を追跡
     let isMounted = true;
     
+    // 前回のパスを復元（ローカルストレージ）
+    const loadStoredPath = () => {
+      if (!isClient) return null;
+      
+      try {
+        const savedPath = localStorage.getItem('lastSelectedPath');
+        if (savedPath) {
+          console.log(`前回のファイルパスをロード: ${savedPath}`);
+          return savedPath;
+        }
+      } catch (e) {
+        console.log('LocalStorageからの読み込みエラー');
+      }
+      return null;
+    };
+    
+    // 初期化処理
     const initializeApp = async () => {
       try {
-        if (!isMounted) return;
-        
-        setConnectionAttempts(prev => prev + 1);
-        
-        // APIの健全性をチェック
-        const ports = [8000, 8080, 8888, 8081, 8001, 3001, 5000];
-        setTriedPorts(ports);
-        
-        // Electron環境の場合はElectron APIの準備完了を待機
-        if (isClient && !isElectronReady && window.electron) {
-          console.log('Electron API準備中、初期化を待機します...');
-          await new Promise(resolve => setTimeout(resolve, 1000));
+        // ローカルストレージから前回のパスを読み込み
+        const storedPath = loadStoredPath();
+        if (storedPath) {
+          setSelectedFilePath(storedPath);
         }
         
-        // API接続をチェック
-        const isConnected = await checkApiConnection();
-        
-        if (!isConnected) {
-          setInitError({
-            message: 'バックエンドサーバーに接続できません。',
-            details: {
-              reason: '別のアプリケーションがAPIポートを使用している可能性があります。',
-              solution: 'アプリケーションを再起動するか、使用中のアプリケーションを終了してから再試行してください。'
-            }
-          });
+        // API接続が確立されていない場合は確認
+        if (!apiStatus.connected && !apiStatus.loading) {
+          // 中央管理された接続確認を実行
+          const isConnected = await checkConnection();
           
-          addNotification('バックエンドサーバーに接続できません。', 'error');
-          setIsInitializing(false);
-          return;
+          if (!isMounted) return;
+          
+          if (!isConnected) {
+            console.log('バックエンドサーバーに接続できません');
+            // 初回接続失敗時のみエラーメッセージを設定
+            if (initError === null) {
+              setInitError({
+                message: 'バックエンドサーバーに接続できません。',
+                details: {
+                  reason: '別のアプリケーションがAPIポートを使用している可能性があります。',
+                  solution: 'アプリケーションを再起動するか、使用中のアプリケーションを終了してから再試行してください。'
+                }
+              });
+              
+              addNotification('バックエンドサーバーに接続できません。', 'error');
+            }
+          } else {
+            // 接続成功時はエラーをクリア
+            setInitError(null);
+          }
+        } else if (apiStatus.connected) {
+          // 接続済みの場合はエラーをクリア
+          setInitError(null);
         }
         
-        // デフォルトパスを取得
-        const response = await getDefaultPath();
-        if (response.success && response.path) {
-          setSelectedFilePath(response.path);
-          addNotification('デフォルトファイルを読み込みました', 'success');
-        } else {
-          addNotification('デフォルトファイルが見つかりません。ファイルを選択してください。', 'error');
-          setInitError({
-            message: 'デフォルトファイルが見つかりません。ファイルを選択してください。',
-            details: response
-          });
+        // APIが接続されていればデフォルトパスを取得
+        if (apiStatus.connected && !storedPath) {
+          try {
+            const response = await getDefaultPath();
+            if (response.success && response.path && isMounted) {
+              setSelectedFilePath(response.path);
+              
+              // パスを保存
+              if (isClient) {
+                try {
+                  localStorage.setItem('lastSelectedPath', response.path);
+                } catch (e) {
+                  console.log('LocalStorageへの保存エラー');
+                }
+              }
+              
+              addNotification('デフォルトファイルを読み込みました', 'success');
+            } else {
+              console.log('デフォルトファイルパスが取得できませんでした');
+            }
+          } catch (e) {
+            console.log('デフォルトファイルパス取得エラー');
+          }
         }
+        
       } catch (error: any) {
-        console.error('アプリケーション初期化エラー:', error);
+        console.error(`アプリケーション初期化エラー: ${error.message}`);
         
         if (isMounted) {
           setInitError({
@@ -134,74 +138,46 @@ export default function Home() {
       }
     };
     
+    // 初期化実行
     initializeApp();
     
     return () => {
       isMounted = false;
     };
-  }, [addNotification, checkApiConnection, isElectronReady]);
+  }, [addNotification, apiStatus.connected, apiStatus.loading, checkConnection, initError]);
 
-  // 接続再試行
-  const handleRetryConnection = async () => {
-    setConnectionAttempts(prev => prev + 1);
-    setIsInitializing(true);
-    setInitError(null);
-    
-    try {
-      const waitTime = Math.min(connectionAttempts * 1000, 5000);
-      
-      addNotification(`バックエンドサーバーへの接続を再試行しています...(${waitTime}ms 待機)`, 'info');
-      
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-      
-      const result = await testApiConnection();
-      if (result.success) {
-        addNotification('APIサーバーに接続しました', 'success');
-        
-        const response = await getDefaultPath();
-        if (response.success && response.path) {
-          setSelectedFilePath(response.path);
-          addNotification('デフォルトファイルを読み込みました', 'success');
-        }
-      } else {
-        setInitError({
-          message: 'バックエンドサーバーに接続できません。',
-          details: result.details
-        });
-        
-        if (connectionAttempts >= 3) {
-          addNotification('複数回の接続試行に失敗しました。アプリケーションを再起動してください。', 'error');
-        } else {
-          addNotification('APIサーバーに接続できません。', 'error');
-        }
-      }
-    } catch (error: any) {
-      console.error('接続再試行エラー:', error);
-      setInitError({
-        message: 'APIサーバーに接続できません。',
-        details: error
-      });
-      addNotification('APIサーバーへの接続試行中にエラーが発生しました。', 'error');
-    } finally {
-      setIsInitializing(false);
-    }
-  };
-
-  // APIステータスの再試行ハンドラー
-  const handleApiStatusRetry = async () => {
+  // API状態更新のハンドラー
+  const handleApiStatusRetry = useCallback(async () => {
     try {
       addNotification('バックエンドサーバーへの再接続を試みています...', 'info');
-      await checkApiConnection();
+      const result = await checkConnection();
+      
+      if (result) {
+        addNotification('バックエンドサーバーへの接続が確立されました', 'success');
+        // 接続成功時にデータを再読み込み
+        refreshData();
+      } else {
+        addNotification('バックエンドサーバーへの再接続に失敗しました', 'error');
+      }
     } catch (error) {
-      console.error('API再接続エラー:', error);
+      console.error(`API再接続エラー: ${error instanceof Error ? error.message : 'Unknown error'}`);
       addNotification('バックエンドサーバーへの再接続に失敗しました', 'error');
     }
-  };
+  }, [addNotification, checkConnection, refreshData]);
 
   // ファイル選択ハンドラー
-  const handleSelectFile = (path: string) => {
+  const handleSelectFile = useCallback((path: string) => {
     setSelectedFilePath(path);
-  };
+    
+    // パスを保存
+    if (isClient) {
+      try {
+        localStorage.setItem('lastSelectedPath', path);
+      } catch (e) {
+        console.log('LocalStorageへの保存エラー');
+      }
+    }
+  }, []);
 
   return (
     <main className="min-h-screen bg-background">
@@ -213,25 +189,42 @@ export default function Home() {
       />
       
       <div className="max-w-7xl mx-auto px-4 py-6">
-        <EnhancedAPIStatus 
-          onRetry={handleApiStatusRetry} 
-        />
+        {/* API接続エラー通知 */}
+        {!apiStatus.connected && (
+          <div className="mb-4 p-3 rounded bg-red-900 bg-opacity-30">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-red-500 mr-3" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+                <div>
+                  <p className="font-medium text-white">API接続エラー</p>
+                  <p className="text-sm text-gray-300">
+                    バックエンドサーバーに接続できません
+                  </p>
+                </div>
+              </div>
+              
+              <button
+                onClick={handleApiStatusRetry}
+                className="bg-white text-gray-800 px-3 py-1 rounded text-sm transition-colors hover:bg-gray-200"
+              >
+                再接続
+              </button>
+            </div>
+          </div>
+        )}
         
-        {!isInitializing && initError && initError.message.includes('接続できません') ? (
-          <ConnectionError 
-            onRetry={handleRetryConnection}
-            ports={triedPorts}
-            attempts={connectionAttempts}
-            lastError={initError.details?.message}
-          />
-        ) : !isInitializing && initError ? (
+        {/* 初期化エラー表示 */}
+        {!isInitializing && initError && (
           <ErrorMessage 
             message={initError.message} 
             details={initError.details}
-            onRetry={handleRetryConnection}
+            onRetry={handleApiStatusRetry}
           />
-        ) : null}
+        )}
         
+        {/* データ取得エラー表示 */}
         {error && (
           <ErrorMessage 
             message={error.message} 
@@ -240,6 +233,7 @@ export default function Home() {
           />
         )}
         
+        {/* メトリクスカード表示 */}
         {metrics && (
           <MetricsCards 
             summary={metrics.summary} 
@@ -247,6 +241,7 @@ export default function Home() {
           />
         )}
         
+        {/* プロジェクト一覧表示 */}
         <ProjectTable 
           projects={projects || []} 
           isLoading={isLoading}
@@ -254,20 +249,24 @@ export default function Home() {
           filePath={selectedFilePath || undefined}
         />
         
+        {/* チャート表示 - Suspenseによる遅延ロード */}
         {metrics && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <ProgressChart 
-              data={metrics.progress_distribution} 
-              isLoading={isLoading} 
+          <Suspense fallback={
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="dashboard-card h-80 flex items-center justify-center">
+                <div className="animate-pulse text-text-secondary">グラフをロード中...</div>
+              </div>
+              <div className="dashboard-card h-80 flex items-center justify-center">
+                <div className="animate-pulse text-text-secondary">グラフをロード中...</div>
+              </div>
+            </div>
+          }>
+            <DashboardCharts
+              metrics={metrics}
+              isLoading={isLoading}
             />
-            <DurationChart 
-              data={metrics.duration_distribution} 
-              isLoading={isLoading} 
-            />
-          </div>
+          </Suspense>
         )}
-        
-        <ClientInfo />
       </div>
     </main>
   );
