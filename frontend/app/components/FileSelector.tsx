@@ -20,8 +20,8 @@ const FileSelector: React.FC<FileSelectorProps> = ({ onSelectFile, selectedFileP
     const electronCheck = isElectronEnvironment();
     setIsElectron(electronCheck);
     console.log('FileSelector: Electron環境の検出結果:', electronCheck, {
-      windowElectron: window.electron ? '存在します' : '存在しません',
-      windowElectronDialog: window.electron?.dialog ? '存在します' : '存在しません'
+      windowElectron: typeof window !== 'undefined' && window.electron ? '存在します' : '存在しません',
+      windowElectronDialog: typeof window !== 'undefined' && window.electron?.dialog ? '存在します' : '存在しません'
     });
   }, []);
 

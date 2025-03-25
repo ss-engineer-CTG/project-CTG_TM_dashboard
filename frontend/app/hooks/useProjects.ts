@@ -5,14 +5,11 @@ import { Project, DashboardMetrics, ErrorInfo } from '../lib/types';
 import { getInitialData, openFile } from '../lib/services';
 import { useNotification } from '../contexts/NotificationContext';
 import { useApi } from '../contexts/ApiContext';
-import { isClient } from '../lib/utils/environment';
 
-// パフォーマンス計測
-if (typeof window !== 'undefined') {
-  window.performance.mark('use_projects_init_start');
-}
+// クライアントサイドかどうかをチェック
+const isClient = typeof window !== 'undefined';
 
-// データの永続化関数 - 最適化版
+// データの永続化関数
 const persistData = (key: string, data: any) => {
   if (!isClient) return;
   
@@ -31,7 +28,7 @@ const persistData = (key: string, data: any) => {
   }
 };
 
-// 保存データのロード関数 - 最適化版
+// 保存データのロード関数
 const loadPersistedData = (key: string, maxAge: number = 60 * 60 * 1000) => {
   if (!isClient) return null;
   
@@ -50,7 +47,7 @@ const loadPersistedData = (key: string, maxAge: number = 60 * 60 * 1000) => {
 };
 
 /**
- * プロジェクト情報を管理するカスタムフック - 最適化版
+ * プロジェクト情報を管理するカスタムフック
  * 
  * @param filePath - ダッシュボードCSVファイルのパス
  * @returns プロジェクト情報と関連機能
@@ -62,7 +59,7 @@ export const useProjects = (filePath: string | null) => {
   const [error, setError] = useState<ErrorInfo | null>(null);
   const { addNotification } = useNotification();
   
-  // 最適化: isMountedの参照を使用して、アンマウント後の状態更新を防止
+  // マウント状態の参照を使用して、アンマウント後の状態更新を防止
   const isMounted = useRef(true);
   const lastFetchTime = useRef<number>(0);
   const fetchingData = useRef<boolean>(false);
@@ -82,14 +79,9 @@ export const useProjects = (filePath: string | null) => {
     };
   }, []);
 
-  // キャッシュからデータを読み込む - 最適化版
+  // キャッシュからデータを読み込む
   useEffect(() => {
     if (!isClient || initialLoadDone) return;
-    
-    // パフォーマンスマーク
-    if (typeof window !== 'undefined') {
-      window.performance.mark('cache_load_start');
-    }
     
     // 保存データをロードして先に表示
     const cachedProjects = loadPersistedData('projects');
@@ -97,24 +89,16 @@ export const useProjects = (filePath: string | null) => {
     
     if (cachedProjects) {
       setProjects(cachedProjects);
-      console.log('キャッシュからプロジェクトデータを復元');
     }
     
     if (cachedMetrics) {
       setMetrics(cachedMetrics);
-      console.log('キャッシュからメトリクスデータを復元');
     }
     
     setInitialLoadDone(true);
-    
-    // パフォーマンスマーク
-    if (typeof window !== 'undefined') {
-      window.performance.mark('cache_load_complete');
-      window.performance.measure('cache_load_duration', 'cache_load_start', 'cache_load_complete');
-    }
   }, [initialLoadDone]);
 
-  // 改善されたデータ取得関数 - 最適化版
+  // データ取得関数
   const fetchData = useCallback(async () => {
     if (!isClient || !isMounted.current || !filePath) {
       return;
@@ -133,11 +117,6 @@ export const useProjects = (filePath: string | null) => {
     
     lastFetchTime.current = now;
     fetchingData.current = true;
-    
-    // パフォーマンスマーク
-    if (typeof window !== 'undefined') {
-      window.performance.mark('fetch_data_start');
-    }
     
     // API接続が確立されていることを確認
     if (!apiStatus.connected) {
@@ -173,12 +152,6 @@ export const useProjects = (filePath: string | null) => {
       if (initialData.error) {
         throw initialData.error;
       }
-      
-      // パフォーマンスマーク - 成功
-      if (typeof window !== 'undefined') {
-        window.performance.mark('fetch_data_success');
-        window.performance.measure('fetch_data_success_duration', 'fetch_data_start', 'fetch_data_success');
-      }
     } catch (error: any) {
       const errorMessage = error.message || 'データの取得中にエラーが発生しました';
       const errorDetails = error.details || error;
@@ -192,12 +165,6 @@ export const useProjects = (filePath: string | null) => {
       
       setError({ message: errorMessage, details: errorDetails });
       addNotification(errorMessage, 'error');
-      
-      // パフォーマンスマーク - エラー
-      if (typeof window !== 'undefined') {
-        window.performance.mark('fetch_data_error');
-        window.performance.measure('fetch_data_error_duration', 'fetch_data_start', 'fetch_data_error');
-      }
     } finally {
       if (isMounted.current) {
         setIsLoading(false);
@@ -206,7 +173,7 @@ export const useProjects = (filePath: string | null) => {
     }
   }, [filePath, addNotification, apiStatus.connected]);
 
-  // ファイルパスが変更されたら自動的にデータを再取得 - 最適化版
+  // ファイルパスが変更されたら自動的にデータを再取得
   useEffect(() => {
     if (!isClient || !isMounted.current) return;
     
@@ -222,7 +189,7 @@ export const useProjects = (filePath: string | null) => {
     };
   }, [filePath, fetchData, apiStatus.connected]);
 
-  // データ更新関数 - 最適化版
+  // データ更新関数
   const refreshData = useCallback(async () => {
     if (!isClient || !isMounted.current || !filePath) {
       if (!filePath) {
@@ -241,14 +208,9 @@ export const useProjects = (filePath: string | null) => {
     }
   }, [filePath, fetchData, addNotification, error]);
 
-  // ファイルを開く関数 - エラーハンドリング強化
+  // ファイルを開く関数
   const handleOpenFile = useCallback(async (path: string) => {
     if (!isClient || !isMounted.current) return;
-    
-    // パフォーマンスマーク
-    if (typeof window !== 'undefined') {
-      window.performance.mark('open_file_start');
-    }
     
     try {
       // パスの種類を識別するための正規表現
@@ -281,12 +243,6 @@ export const useProjects = (filePath: string | null) => {
         
         addNotification(errorMsg, 'error');
       }
-      
-      // パフォーマンスマーク - 成功
-      if (typeof window !== 'undefined') {
-        window.performance.mark('open_file_complete');
-        window.performance.measure('open_file_duration', 'open_file_start', 'open_file_complete');
-      }
     } catch (error: any) {
       const errorMessage = error.message || 'ファイルを開く際にエラーが発生しました';
       console.error('ファイルを開く際のエラー:', error);
@@ -294,16 +250,10 @@ export const useProjects = (filePath: string | null) => {
       if (isMounted.current) {
         addNotification(errorMessage, 'error');
       }
-      
-      // パフォーマンスマーク - エラー
-      if (typeof window !== 'undefined') {
-        window.performance.mark('open_file_error');
-        window.performance.measure('open_file_error_duration', 'open_file_start', 'open_file_error');
-      }
     }
   }, [addNotification]);
 
-  // 定期的なデータ更新の最適化
+  // 定期的なデータ更新
   useEffect(() => {
     if (!isClient || !filePath || !apiStatus.connected || !isMounted.current) return;
     
@@ -329,7 +279,7 @@ export const useProjects = (filePath: string | null) => {
       }
     };
     
-    // 自動更新を開始 - 最適化: 間隔を8分に延長
+    // 自動更新を開始 - 8分に延長
     const startAutoRefresh = () => {
       if (intervalId) clearInterval(intervalId);
       intervalId = setInterval(() => {
@@ -349,18 +299,6 @@ export const useProjects = (filePath: string | null) => {
       if (intervalId) clearInterval(intervalId);
     };
   }, [filePath, apiStatus.connected, fetchData]);
-
-  // パフォーマンスマーク - 初期化完了
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.performance.mark('use_projects_init_complete');
-      window.performance.measure(
-        'use_projects_initialization', 
-        'use_projects_init_start', 
-        'use_projects_init_complete'
-      );
-    }
-  }, []);
 
   return {
     projects,

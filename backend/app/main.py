@@ -1,5 +1,4 @@
 from fastapi import FastAPI, Request, Response
-# JSONResponseを追加
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -113,18 +112,18 @@ def find_best_available_port(preferred_ports=[8000, 8080, 8888, 8081, 8001, 3001
     import concurrent.futures
     from contextlib import closing
     
-    # 特別な環境変数があればそのポートを優先
+    # 特別な環境変数があればそのポートを最優先
     env_port = os.environ.get('ELECTRON_PORT')
     if env_port and env_port.isdigit():
         logger.info(f"環境変数からポート {env_port} を優先します")
-        preferred_ports.insert(0, int(env_port))
+        preferred_ports = [int(env_port)] + [p for p in preferred_ports if int(p) != int(env_port)]
     
     # コマンドライン引数があればそのポートを最優先
     if len(sys.argv) > 1 and sys.argv[1].isdigit():
         arg_port = int(sys.argv[1])
         if arg_port not in preferred_ports:
             logger.info(f"コマンドライン引数からポート {arg_port} を最優先します")
-            preferred_ports.insert(0, arg_port)
+            preferred_ports = [arg_port] + [p for p in preferred_ports if p != arg_port]
     
     record_stage('port_detection_start')
     
@@ -364,7 +363,6 @@ def create_app(port=8000):
         version="1.0.0",
         lifespan=lifespan,
         docs_url=None if not os.environ.get('DEBUG') else "/docs",
-        # 問題の行を削除 - デフォルトのJSONResponseに戻す
     )
     
     # ポート情報をアプリケーションの状態に保存

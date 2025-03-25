@@ -8,8 +8,13 @@ console.log('Preload script starting...');
 let ipcInitialized = false;
 let documentReady = false;
 
+// 開発モードかどうか
+const isDev = process.env.NODE_ENV === 'development' || 
+              process.defaultApp || 
+              /electron/.test(process.execPath);
+
 /**
- * Electron環境変数を安全に設定する関数
+ * Electron環境変数を安全に設定する関数 - DOM状態を考慮した実装
  */
 const setElectronReady = () => {
   // グローバルフラグを設定
@@ -17,50 +22,60 @@ const setElectronReady = () => {
   window.currentApiPort = null;
   window.apiInitialized = false;
   
-  // DOM要素にElectron検出フラグを追加（CSS選択子で検出可能に）
-  try {
-    // 既存のメタタグをチェック
-    let meta = document.querySelector('meta[name="electron-ready"]');
-    if (!meta) {
-      // なければ作成
-      meta = document.createElement('meta');
-      meta.name = 'electron-ready';
-      meta.content = 'true';
-      document.head.appendChild(meta);
+  // DOM状態に応じたメタタグ追加の処理
+  const safelyAddMetaTag = () => {
+    if (document && document.head) {
+      try {
+        // 既存のメタタグをチェック
+        let meta = document.querySelector('meta[name="electron-ready"]');
+        if (!meta) {
+          meta = document.createElement('meta');
+          meta.name = 'electron-ready';
+          meta.content = 'true';
+          document.head.appendChild(meta);
+        }
+        return true;
+      } catch (e) {
+        console.error('メタタグ設定エラー:', e);
+        return false;
+      }
     }
-  } catch (e) {
-    console.error('メタタグ設定エラー:', e);
+    return false;
+  };
+
+  // DOMの状態に応じた処理
+  if (document.readyState === 'loading') {
+    // DOMがまだロード中の場合は、完了イベントを待つ
+    document.addEventListener('DOMContentLoaded', () => {
+      safelyAddMetaTag();
+      document.dispatchEvent(new Event('electron-ready'));
+    });
+  } else {
+    // すでにDOMが読み込まれている場合は直接実行を試みる
+    if (!safelyAddMetaTag()) {
+      // 失敗した場合は短い遅延後に再試行
+      setTimeout(() => {
+        safelyAddMetaTag();
+        try {
+          document.dispatchEvent(new Event('electron-ready'));
+        } catch (e) {
+          console.error('イベント発行エラー:', e);
+        }
+      }, 50);
+    } else {
+      try {
+        document.dispatchEvent(new Event('electron-ready'));
+      } catch (e) {
+        console.error('イベント発行エラー:', e);
+      }
+    }
   }
   
-  // 初期化完了イベントを発行
-  try {
-    if (document.readyState === 'complete' || document.readyState === 'interactive') {
-      document.dispatchEvent(new Event('electron-ready'));
-    } else {
-      document.addEventListener('DOMContentLoaded', () => {
-        document.dispatchEvent(new Event('electron-ready'));
-      });
-    }
-    
-    // カスタムイベントでより詳細な情報を提供
-    document.dispatchEvent(
-      new CustomEvent('app-init', { 
-        detail: { 
-          isElectron: true,
-          time: Date.now(),
-          ready: true
-        } 
-      })
-    );
-    
-    // 明示的に情報をログ出力
-    console.log('Electron環境フラグをセットアップしました:', { 
-      electronReady: window.electronReady,
-      time: Date.now() - preloadStartTime
-    });
-  } catch (e) {
-    console.error('イベント発行エラー:', e);
-  }
+  // 明示的に情報をログ出力
+  console.log('Electron環境フラグをセットアップしました:', { 
+    electronReady: window.electronReady,
+    time: Date.now() - preloadStartTime
+  });
 };
 
 // DOMContentLoadedイベントの高速検出
@@ -85,23 +100,6 @@ function initializeElectronBridge() {
   // レンダラープロセスにElectron APIが準備完了したことを通知
   try {
     document.dispatchEvent(new Event('electron-ready'));
-    
-    // パフォーマンスマーク記録
-    if (window.performance && window.performance.mark) {
-      window.performance.mark('electron_bridge_initialized');
-    }
-    
-    // 早期ロード通知
-    document.dispatchEvent(
-      new CustomEvent('app-init', { 
-        detail: { 
-          isElectron: true,
-          time: Date.now(),
-          ready: true
-        } 
-      })
-    );
-    
     console.log('Electron bridge initialized successfully');
   } catch (e) {
     console.error('初期化イベント発行エラー:', e);
@@ -113,7 +111,10 @@ const validChannels = [
   'api-connection-established',
   'api-server-down',
   'api-server-restarted',
-  'app-initializing'
+  'app-initializing',
+  'app-error',
+  'build-progress',
+  'startup-progress'
 ];
 
 // メインプロセスとレンダラープロセス間の安全な通信を提供
@@ -137,11 +138,7 @@ contextBridge.exposeInMainWorld('electron', {
     writeFile: (filePath, data, options) => ipcRenderer.invoke('fs:writeFile', filePath, data, options),
     mkdir: (dirPath, options) => ipcRenderer.invoke('fs:mkdir', dirPath, options),
     readdir: (dirPath, options) => ipcRenderer.invoke('fs:readdir', dirPath, options),
-    
-    // 追加: ファイル/フォルダを開く機能
     openPath: (path) => ipcRenderer.invoke('fs:openPath', path),
-    
-    // 追加: パスの検証と正規化
     validatePath: (path) => ipcRenderer.invoke('fs:validatePath', path)
   },
   
@@ -167,23 +164,28 @@ contextBridge.exposeInMainWorld('electron', {
     }
   },
   
-  // テスト用のダイアログ関数 
-  testDialog: () => {
-    return ipcRenderer.invoke('dialog:test')
-      .catch(err => {
-        console.error('dialog:test IPC error:', err);
-        return {
-          success: false,
-          error: err.message || 'Unknown error'
-        };
-      });
+  // API通信ブリッジ - 新規追加
+  api: {
+    request: (method, path, params, data, options) => 
+      ipcRenderer.invoke('api:request', method, path, params, data, options),
+    
+    get: (path, params, options) => 
+      ipcRenderer.invoke('api:request', 'GET', path, params, null, options),
+    
+    post: (path, data, params, options) => 
+      ipcRenderer.invoke('api:request', 'POST', path, params, data, options),
+    
+    put: (path, data, params, options) => 
+      ipcRenderer.invoke('api:request', 'PUT', path, params, data, options),
+    
+    delete: (path, params, options) => 
+      ipcRenderer.invoke('api:request', 'DELETE', path, params, null, options)
   },
   
   // 環境変数
   env: {
     isElectron: true,
-    apiUrl: process.env.API_URL || null,
-    startTime: preloadStartTime
+    apiUrl: null
   },
   
   // IPCレンダラー
@@ -200,38 +202,25 @@ contextBridge.exposeInMainWorld('electron', {
         return () => {};
       }
     }
-  },
-  
-  // 診断情報を提供
-  diagnostics: {
-    getStartupTime: () => preloadStartTime,
-    isInitialized: () => ipcInitialized,
-    isElectronReady: () => window.electronReady === true,
-    checkApiConnection: async () => {
-      try {
-        const baseUrl = await ipcRenderer.invoke('get-api-base-url');
-        return { 
-          available: true, 
-          baseUrl,
-          timestamp: Date.now()
-        };
-      } catch (e) {
-        return { 
-          available: false, 
-          error: e.message 
-        };
-      }
-    }
   }
 });
+
+// 開発モードでのみ - デベロッパーツールショートカット
+if (isDev) {
+  window.addEventListener('keydown', (e) => {
+    // F12でデベロッパーツールを開く
+    if (e.key === 'F12') {
+      ipcRenderer.send('toggle-devtools');
+    }
+    // F5で手動リロード
+    if (e.key === 'F5') {
+      window.location.reload();
+    }
+  });
+}
 
 // Electronが明示的に初期化されたことを示す変数を設定
 setElectronReady();
 
 // 準備完了ログ
 console.log(`Preload script completed in ${Date.now() - preloadStartTime}ms`);
-
-// パフォーマンス計測を実施
-if (window.performance && window.performance.mark) {
-  window.performance.mark('preload_complete');
-}

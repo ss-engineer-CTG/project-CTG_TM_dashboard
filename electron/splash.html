@@ -2,89 +2,86 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';">
-  <title>アプリを起動中...</title>
+  <title>アプリケーションを起動中...</title>
   <style>
-    body, html {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-      background: transparent;
+    body {
+      background-color: #1a1a1a;
+      color: white;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
       display: flex;
-      justify-content: center;
+      flex-direction: column;
       align-items: center;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      color: #ffffff;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
       overflow: hidden;
+      user-select: none;
     }
     
-    .splash-container {
-      width: 300px;
-      text-align: center;
-      background: rgba(26, 26, 26, 0.9);
-      border-radius: 12px;
-      padding: 30px;
-      box-shadow: 0 10px 25px rgba(0,0,0,0.3);
-      animation: fadeIn 0.5s ease-out;
-    }
-    
-    .title {
-      font-size: 20px;
+    .logo {
+      width: 120px;
+      height: 120px;
       margin-bottom: 20px;
-      opacity: 0;
-      animation: slideIn 1s forwards 0.2s;
+      animation: pulse 2s infinite;
     }
     
-    .spinner {
-      width: 50px;
-      height: 50px;
-      margin: 0 auto 20px;
-      border: 3px solid rgba(255,255,255,0.3);
-      border-radius: 50%;
-      border-top-color: #60cdff;
-      animation: spin 1s ease-in-out infinite;
+    .progress-container {
+      width: 300px;
+      height: 4px;
+      background-color: #333;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 20px 0;
     }
     
-    .message {
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background-color: #60cdff;
+      transition: width 0.3s ease;
+    }
+    
+    .status-text {
       font-size: 14px;
       color: #b3b3b3;
-      margin-top: 15px;
-      opacity: 0;
-      animation: slideIn 1s forwards 0.4s;
+      margin-top: 10px;
+      min-height: 20px;
     }
     
-    @keyframes fadeIn {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-    
-    @keyframes slideIn {
-      from { 
-        opacity: 0; 
-        transform: translateY(10px);
-      }
-      to { 
-        opacity: 1; 
-        transform: translateY(0);
-      }
-    }
-    
-    @keyframes spin {
-      to { transform: rotate(360deg); }
+    @keyframes pulse {
+      0% { opacity: 0.6; }
+      50% { opacity: 1; }
+      100% { opacity: 0.6; }
     }
   </style>
-  <script>
-    // インライン最小スクリプト
-    document.addEventListener('DOMContentLoaded', () => {
-      window.performance.mark('splash_loaded');
-    });
-  </script>
 </head>
 <body>
-  <div class="splash-container">
-    <div class="spinner"></div>
-    <h1 class="title">プロジェクト進捗ダッシュボード</h1>
-    <p class="message">アプリケーションを起動中です...</p>
+  <div class="logo">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="100%" height="100%" fill="#60cdff">
+      <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/>
+    </svg>
   </div>
+  <h2>Project Dashboard</h2>
+  <div class="progress-container">
+    <div id="progress-bar" class="progress-bar"></div>
+  </div>
+  <div id="status-text" class="status-text">アプリケーションを起動中...</div>
+  
+  <script>
+    // IPCイベントを受信して進捗を更新
+    const { ipcRenderer } = require('electron');
+    
+    // ビルド進捗を表示
+    ipcRenderer.on('build-progress', (event, data) => {
+      document.getElementById('progress-bar').style.width = `${data.progress}%`;
+      document.getElementById('status-text').textContent = data.message;
+    });
+    
+    // 起動進捗を表示
+    ipcRenderer.on('startup-progress', (event, data) => {
+      document.getElementById('progress-bar').style.width = `${data.progress}%`;
+      document.getElementById('status-text').textContent = data.message;
+    });
+  </script>
 </body>
 </html>

@@ -1,33 +1,13 @@
 /**
  * HTTPクライアント
- * - URLの構築
- * - リクエストの送信
+ * - IPC通信を使用してAPIリクエストを処理
  * - レスポンスの処理
  * - エラーハンドリング
  */
 
 // コードサイズ削減のための型定義
 type QueryParams = Record<string, any>;
-type RequestOptions = RequestInit & { timeout?: number };
-
-// ログレベル定義
-const LogLevel = {
-  ERROR: 0,
-  WARNING: 1,
-  INFO: 2,
-  DEBUG: 3
-};
-
-// 現在のログレベル（環境に応じて設定）
-const currentLogLevel = process.env.NODE_ENV === 'development' ? LogLevel.DEBUG : LogLevel.WARNING;
-
-// ロガー関数
-const logger = {
-  error: (message: string) => console.error(`[API Client] ${message}`),
-  warn: (message: string) => currentLogLevel >= LogLevel.WARNING && console.warn(`[API Client] ${message}`),
-  info: (message: string) => currentLogLevel >= LogLevel.INFO && console.info(`[API Client] ${message}`),
-  debug: (message: string) => currentLogLevel >= LogLevel.DEBUG && console.debug(`[API Client] ${message}`)
-};
+type RequestOptions = { timeout?: number; headers?: Record<string, string> };
 
 // カスタムAPIエラー型を定義
 class ApiError extends Error {
@@ -46,32 +26,22 @@ class ApiError extends Error {
   }
 }
 
-// APIクライアントクラス - 最適化版
+// APIクライアントクラス
 class ApiClient {
   private baseUrl: string;
   private requestTimeout: number;
   private requestCache: Map<string, { data: any, timestamp: number, ttl: number }>;
-  private retryConfig: {
-    maxRetries: number;
-    retryDelay: number;
-    retryableErrors: string[];
-  };
-
+  
   constructor(baseUrl: string = '', timeout: number = 10000) {
     this.baseUrl = baseUrl;
     this.requestTimeout = timeout;
     this.requestCache = new Map();
-    this.retryConfig = {
-      maxRetries: 2, // 再試行回数
-      retryDelay: 1000, // 再試行の遅延(ms)
-      retryableErrors: ['Failed to fetch', 'Network request failed', 'timeout', 'network'] // 再試行可能なエラー
-    };
   }
 
   // ベースURLを設定
   setBaseUrl(url: string): void {
     this.baseUrl = url;
-    logger.info(`API Base URL設定: ${url}`);
+    console.log(`API Base URL設定: ${url}`);
   }
 
   // タイムアウトを設定
@@ -82,25 +52,15 @@ class ApiClient {
   // キャッシュのクリア
   clearCache(): void {
     this.requestCache.clear();
-    logger.debug('APIキャッシュをクリア');
+    console.log('APIキャッシュをクリア');
   }
 
-  // URLを構築
-  private buildUrl(endpoint: string, params?: QueryParams): string {
-    const url = new URL(endpoint.startsWith('http') ? endpoint : `${this.baseUrl}${endpoint}`);
-    
-    if (params) {
-      Object.entries(params).forEach(([key, value]) => {
-        if (value !== undefined && value !== null) {
-          url.searchParams.append(key, String(value));
-        }
-      });
-    }
-    
-    return url.toString();
+  // Electron環境かどうかをチェック
+  private isElectronEnvironment(): boolean {
+    return typeof window !== 'undefined' && !!window.electron?.api;
   }
 
-  // HTTPリクエストを送信（リトライロジック追加）
+  // HTTPリクエストを送信
   private async request<T>(
     method: string,
     endpoint: string,
@@ -108,203 +68,113 @@ class ApiClient {
     data?: any,
     options: RequestOptions = {}
   ): Promise<T> {
-    const url = this.buildUrl(endpoint, params);
-    const { timeout = this.requestTimeout, ...fetchOptions } = options;
+    // Electron環境でない場合はエラー
+    if (!this.isElectronEnvironment()) {
+      throw new ApiError(
+        'Electron環境外ではAPIリクエストを実行できません',
+        0,
+        'Electron環境ではありません',
+        'network_error'
+      );
+    }
     
-    // JSON.stringifyを一度だけ実行
-    const body = data ? JSON.stringify(data) : undefined;
+    // 追加のチェック - TypeScriptの型チェックを満たすため
+    if (!window.electron || !window.electron.api) {
+      throw new ApiError(
+        'Electron APIが利用できません',
+        0,
+        'Electron APIが見つかりません',
+        'network_error'
+      );
+    }
     
-    // 基本オプションを設定
-    const requestOptions: RequestInit = {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        ...(fetchOptions.headers || {})
-      },
-      body,
-      ...fetchOptions
-    };
+    const { timeout = this.requestTimeout } = options;
     
-    // リトライカウンター
-    let retryCount = 0;
-    let lastError: any = null;
-    
-    do {
-      // 再試行時の待機時間を指数バックオフで計算
-      if (retryCount > 0) {
-        const delay = this.retryConfig.retryDelay * Math.pow(2, retryCount - 1);
-        logger.debug(`リクエスト再試行: ${retryCount}/${this.retryConfig.maxRetries} (待機: ${delay}ms)`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
+    try {
+      // Electron APIブリッジ経由でリクエスト実行
+      const result = await window.electron.api.request(
+        method,
+        endpoint,
+        params,
+        data,
+        { timeout, ...options }
+      );
       
-      try {
-        // リクエストの作成とAbortControllerの設定
-        const controller = new AbortController();
-        let timeoutId: NodeJS.Timeout | null = null;
-        
-        if (timeout > 0) {
-          timeoutId = setTimeout(() => controller.abort(), timeout);
-        }
-        
-        requestOptions.signal = controller.signal;
-        
-        try {
-          // リクエストを実行
-          logger.debug(`API ${method} リクエスト: ${url.split('?')[0]}`);
-          const response = await fetch(url, requestOptions);
-          
-          // タイムアウトをクリア
-          if (timeoutId) clearTimeout(timeoutId);
-          
-          // レスポンスがJSONでない場合を処理
-          if (response.headers.get('content-type')?.includes('application/json')) {
-            const responseData = await response.json();
-            
-            // エラーレスポンスを処理
-            if (!response.ok) {
-              const errorMessage = responseData.detail || responseData.message || response.statusText;
-              throw new ApiError(
-                `APIエラー: ${errorMessage}`,
-                response.status,
-                JSON.stringify(responseData),
-                'server_error'
-              );
-            }
-            
-            logger.debug(`API レスポンス成功: ${url.split('?')[0]}`);
-            return responseData;
-          } else {
-            // JSONでないレスポンスボディの読み込み
-            const text = await response.text();
-            
-            if (!response.ok) {
-              throw new ApiError(
-                `APIエラー: ${response.statusText}`,
-                response.status,
-                text,
-                'server_error'
-              );
-            }
-            
-            // 空のレスポンスを処理
-            return (text ? JSON.parse(text) : {}) as T;
-          }
-        } finally {
-          // タイムアウトが設定されていたらクリア
-          if (timeoutId) clearTimeout(timeoutId);
-        }
-      } catch (error: any) {
-        lastError = error;
-        
-        // 再試行可能なエラーか確認
-        const isRetryable = 
-          error.name === 'AbortError' || // タイムアウト
-          this.retryConfig.retryableErrors.some(errStr => 
-            error.message?.toLowerCase().includes(errStr.toLowerCase())
-          );
-        
-        // 再試行可能で、まだ試行回数が残っている場合
-        if (isRetryable && retryCount < this.retryConfig.maxRetries) {
-          retryCount++;
-          continue;
-        }
-        
-        // AbortControllerによるタイムアウトエラーを検出
-        if (error.name === 'AbortError') {
-          const timeoutError = new ApiError(
-            'リクエストがタイムアウトしました',
-            408,
-            `Timeout after ${timeout}ms`,
-            'timeout_error'
-          );
-          logger.warn(`API タイムアウト: ${url.split('?')[0]} (${timeout}ms)`);
-          throw timeoutError;
-        }
-        
-        // API独自のエラーを再スロー
-        if (error.isApiError) {
-          logger.error(`API エラー: ${error.message}`);
-          throw error;
-        }
-        
-        // ネットワークエラー - 開発環境以外ではエラーログを簡略化
-        if (error.message.includes('Failed to fetch') || error.message.includes('Network request failed')) {
-          const networkError = new ApiError(
-            'ネットワークエラー: サーバーに接続できません',
-            0,
-            error.message,
-            'network_error'
-          );
-          
-          // 開発環境のみ詳細ログを出力
-          if (process.env.NODE_ENV === 'development') {
-            logger.error(`API ネットワークエラー: ${url.split('?')[0]} - ${error.message}`);
-          } else {
-            logger.error(`API ネットワークエラー: ${url.split('?')[0]}`);
-          }
-          
-          throw networkError;
-        }
-        
-        // その他のエラー
-        logger.error(`API 予期せぬエラー: ${url.split('?')[0]} - ${error.message}`);
-        throw new ApiError(
-          `予期しないエラー: ${error.message}`,
-          0,
-          error.stack || '',
-          'unknown_error'
-        );
-      }
-    } while (retryCount <= this.retryConfig.maxRetries);
-    
-    // ここには到達しないはずだが、念のため
-    throw lastError;
+      return result as T;
+    } catch (error: any) {
+      // エラーが適切にフォーマットされていることを確認
+      const apiError = new ApiError(
+        error.message || 'APIリクエストエラー',
+        error.status || 0,
+        error.details || '',
+        error.type || 'unknown_error'
+      );
+      
+      throw apiError;
+    }
   }
 
   // キャッシュを使用した高速化されたGETリクエスト
   async get<T>(endpoint: string, params?: QueryParams, options: RequestOptions = {}, cacheTTL: number = 0): Promise<T> {
-    const url = this.buildUrl(endpoint, params);
+    // キャッシュキーの生成
+    const cacheKey = this.generateCacheKey(endpoint, params);
     
     // キャッシュが有効な場合はキャッシュをチェック
     if (cacheTTL > 0) {
-      const cachedItem = this.requestCache.get(url);
+      const cachedItem = this.requestCache.get(cacheKey);
       if (cachedItem && Date.now() - cachedItem.timestamp < cachedItem.ttl) {
-        logger.debug(`API キャッシュヒット: ${url.split('?')[0]}`);
         return cachedItem.data;
       }
     }
     
+    // リクエスト実行
     const data = await this.request<T>('GET', endpoint, params, undefined, options);
     
     // 結果をキャッシュ
     if (cacheTTL > 0) {
-      this.requestCache.set(url, { 
+      this.requestCache.set(cacheKey, { 
         data, 
         timestamp: Date.now(), 
         ttl: cacheTTL 
       });
-      logger.debug(`API キャッシュ保存: ${url.split('?')[0]} (TTL: ${cacheTTL}ms)`);
     }
     
     return data;
   }
 
-  // 最適化されたPOSTリクエスト
+  // POSTリクエスト
   async post<T>(endpoint: string, data?: any, params?: QueryParams, options: RequestOptions = {}): Promise<T> {
     return this.request<T>('POST', endpoint, params, data, options);
   }
 
-  // 最適化されたPUTリクエスト
+  // PUTリクエスト
   async put<T>(endpoint: string, data?: any, params?: QueryParams, options: RequestOptions = {}): Promise<T> {
     return this.request<T>('PUT', endpoint, params, data, options);
   }
 
-  // 最適化されたDELETEリクエスト
+  // DELETEリクエスト
   async delete<T>(endpoint: string, params?: QueryParams, options: RequestOptions = {}): Promise<T> {
     return this.request<T>('DELETE', endpoint, params, undefined, options);
+  }
+
+  // キャッシュキーを生成
+  private generateCacheKey(endpoint: string, params?: QueryParams): string {
+    let key = endpoint;
+    
+    if (params) {
+      const paramPairs = Object.entries(params)
+        .filter(([_, value]) => value !== undefined && value !== null)
+        .map(([key, value]) => `${key}=${String(value)}`)
+        .sort();
+      
+      if (paramPairs.length > 0) {
+        key += '?' + paramPairs.join('&');
+      }
+    }
+    
+    return key;
   }
 }
 
 // シングルトンインスタンスを作成
-export const apiClient = new ApiClient('', 10000); // 10秒タイムアウト
+export const apiClient = new ApiClient('', 10000);

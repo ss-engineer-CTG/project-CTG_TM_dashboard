@@ -4,7 +4,7 @@ import React, { useEffect } from 'react';
 import { Notification as NotificationType } from '@/app/lib/types';
 import { useNotification } from '@/app/contexts/NotificationContext';
 
-// コンポーネントを名前付きエクスポートに変更
+// コンポーネントを名前付きエクスポートのみに変更
 export const Notification: React.FC = () => {
   const { notifications, removeNotification } = useNotification();
   
@@ -47,5 +47,8 @@ export const Notification: React.FC = () => {
   );
 };
 
-// 後方互換性のためのデフォルトエクスポート
+// どちらかの方法を選択:
+// 1. 名前付きエクスポートのみに統一する場合、以下は削除
 export default Notification;
+
+// 2. または、アプリケーション全体で一貫性を保つためにデフォルトエクスポートを維持

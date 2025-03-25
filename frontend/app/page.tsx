@@ -1,65 +1,29 @@
 'use client';
 
-import React, { useState, useEffect, lazy, Suspense, useCallback } from 'react';
+import React, { useState, useEffect, Suspense, useCallback, lazy } from 'react';
 import { useProjects } from './hooks/useProjects';
 import Header from './components/Header';
 import MetricsCards from './components/MetricsCards';
 import ProjectTable from './components/ProjectTable';
-import ConnectionError from './components/ConnectionError';
 import ErrorMessage from './components/ErrorMessage';
-import EnhancedAPIStatus from './components/EnhancedAPIStatus';
 import { getDefaultPath } from './lib/services';
 import { useNotification } from './contexts/NotificationContext';
 import { useApi } from './contexts/ApiContext';
-import { isClient } from './lib/utils/environment';
-
-// パフォーマンス計測
-if (typeof window !== 'undefined') {
-  window.performance.mark('page_component_start');
-}
 
 // 遅延ロードするコンポーネント
 const DashboardCharts = lazy(() => import('./components/DashboardCharts'));
-const ClientInfo = lazy(() => import('./components/ClientInfo'));
 
-// ログレベル定義
-const LogLevel = {
-  ERROR: 0,
-  WARNING: 1,
-  INFO: 2,
-  DEBUG: 3
-};
-
-// 現在のログレベル（環境に応じて設定）
-const currentLogLevel = process.env.NODE_ENV === 'development' ? LogLevel.DEBUG : LogLevel.WARNING;
-
-// ロガー関数
-const logger = {
-  error: (message: string) => console.error(`[Page] ${message}`),
-  warn: (message: string) => currentLogLevel >= LogLevel.WARNING && console.warn(`[Page] ${message}`),
-  info: (message: string) => currentLogLevel >= LogLevel.INFO && console.info(`[Page] ${message}`),
-  debug: (message: string) => currentLogLevel >= LogLevel.DEBUG && console.debug(`[Page] ${message}`)
-};
+// クライアントサイドかどうかをチェック
+const isClient = typeof window !== 'undefined';
 
 export default function Home() {
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const [initError, setInitError] = useState<{message: string, details?: any} | null>(null);
-  const [connectionAttempts, setConnectionAttempts] = useState<number>(0);
-  const [triedPorts, setTriedPorts] = useState<number[]>([]);
-  
   const { addNotification } = useNotification();
   
   // APIコンテキストから状態を取得
-  const { status: apiStatus, checkConnection, resetConnection } = useApi();
-
-  // パフォーマンスマーク
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.performance.mark('home_component_mounted');
-      window.performance.measure('home_initial_render', 'page_component_start', 'home_component_mounted');
-    }
-  }, []);
+  const { status: apiStatus, checkConnection } = useApi();
 
   // カスタムフックからプロジェクト状態と関数を取得
   const { 
@@ -71,15 +35,10 @@ export default function Home() {
     openFile 
   } = useProjects(selectedFilePath);
 
-  // 初回マウント時にデフォルトファイルパスを取得 - 最適化版
+  // 初回マウント時にデフォルトファイルパスを取得
   useEffect(() => {
     // マウント状態を追跡
     let isMounted = true;
-    
-    // パフォーマンスマーク
-    if (typeof window !== 'undefined') {
-      window.performance.mark('initialization_effect_start');
-    }
     
     // 前回のパスを復元（ローカルストレージ）
     const loadStoredPath = () => {
@@ -88,11 +47,11 @@ export default function Home() {
       try {
         const savedPath = localStorage.getItem('lastSelectedPath');
         if (savedPath) {
-          logger.info(`前回のファイルパスをロード: ${savedPath}`);
+          console.log(`前回のファイルパスをロード: ${savedPath}`);
           return savedPath;
         }
       } catch (e) {
-        logger.debug('LocalStorageからの読み込みエラー');
+        console.log('LocalStorageからの読み込みエラー');
       }
       return null;
     };
@@ -106,13 +65,6 @@ export default function Home() {
           setSelectedFilePath(storedPath);
         }
         
-        // 接続試行回数を増加
-        setConnectionAttempts(prev => prev + 1);
-        
-        // 標準的なポートリスト
-        const ports = [8000, 8080, 8888, 8081, 8001, 3001, 5000];
-        setTriedPorts(ports);
-        
         // API接続が確立されていない場合は確認
         if (!apiStatus.connected && !apiStatus.loading) {
           // 中央管理された接続確認を実行
@@ -121,7 +73,7 @@ export default function Home() {
           if (!isMounted) return;
           
           if (!isConnected) {
-            logger.warn('バックエンドサーバーに接続できません');
+            console.log('バックエンドサーバーに接続できません');
             // 初回接続失敗時のみエラーメッセージを設定
             if (initError === null) {
               setInitError({
@@ -155,21 +107,21 @@ export default function Home() {
                 try {
                   localStorage.setItem('lastSelectedPath', response.path);
                 } catch (e) {
-                  logger.debug('LocalStorageへの保存エラー');
+                  console.log('LocalStorageへの保存エラー');
                 }
               }
               
               addNotification('デフォルトファイルを読み込みました', 'success');
             } else {
-              logger.info('デフォルトファイルパスが取得できませんでした');
+              console.log('デフォルトファイルパスが取得できませんでした');
             }
           } catch (e) {
-            logger.warn('デフォルトファイルパス取得エラー');
+            console.log('デフォルトファイルパス取得エラー');
           }
         }
         
       } catch (error: any) {
-        logger.error(`アプリケーション初期化エラー: ${error.message}`);
+        console.error(`アプリケーション初期化エラー: ${error.message}`);
         
         if (isMounted) {
           setInitError({
@@ -182,12 +134,6 @@ export default function Home() {
       } finally {
         if (isMounted) {
           setIsInitializing(false);
-          
-          // パフォーマンスマーク
-          if (typeof window !== 'undefined') {
-            window.performance.mark('initialization_effect_complete');
-            window.performance.measure('app_initialization', 'initialization_effect_start', 'initialization_effect_complete');
-          }
         }
       }
     };
@@ -199,72 +145,6 @@ export default function Home() {
       isMounted = false;
     };
   }, [addNotification, apiStatus.connected, apiStatus.loading, checkConnection, initError]);
-
-  // 接続再試行 - useCallback化
-  const handleRetryConnection = useCallback(async () => {
-    // パフォーマンスマーク
-    if (typeof window !== 'undefined') {
-      window.performance.mark('connection_retry_start');
-    }
-    
-    setConnectionAttempts(prev => prev + 1);
-    setIsInitializing(true);
-    setInitError(null);
-    
-    try {
-      // 接続試行の開始を通知
-      addNotification(`バックエンドサーバーへの接続を再試行しています...`, 'info');
-      
-      // APIコンテキスト経由で接続リセットを実行
-      const success = await resetConnection();
-      
-      if (success) {
-        addNotification('APIサーバーに接続しました', 'success');
-        setIsInitializing(false);
-        
-        // デフォルトパス取得を再試行
-        try {
-          const response = await getDefaultPath();
-          if (response.success && response.path) {
-            setSelectedFilePath(response.path);
-            addNotification('デフォルトファイルを読み込みました', 'success');
-          }
-        } catch (e) {
-          logger.warn('再接続後のデフォルトパス取得エラー');
-        }
-      } else {
-        setInitError({
-          message: 'バックエンドサーバーに接続できません。',
-          details: {
-            reason: '複数回の再試行が失敗しました。',
-            solution: 'アプリケーションを再起動してください。'
-          }
-        });
-        
-        if (connectionAttempts >= 3) {
-          addNotification('複数回の接続試行に失敗しました。アプリケーションを再起動してください。', 'error');
-        } else {
-          addNotification('APIサーバーに接続できません。', 'error');
-        }
-        
-        setIsInitializing(false);
-      }
-    } catch (error: any) {
-      logger.error(`接続再試行エラー: ${error.message}`);
-      setInitError({
-        message: 'APIサーバーに接続できません。',
-        details: error
-      });
-      addNotification('APIサーバーへの接続試行中にエラーが発生しました。', 'error');
-      setIsInitializing(false);
-    }
-    
-    // パフォーマンスマーク
-    if (typeof window !== 'undefined') {
-      window.performance.mark('connection_retry_complete');
-      window.performance.measure('connection_retry_duration', 'connection_retry_start', 'connection_retry_complete');
-    }
-  }, [addNotification, connectionAttempts, resetConnection]);
 
   // API状態更新のハンドラー
   const handleApiStatusRetry = useCallback(async () => {
@@ -280,7 +160,7 @@ export default function Home() {
         addNotification('バックエンドサーバーへの再接続に失敗しました', 'error');
       }
     } catch (error) {
-      logger.error(`API再接続エラー: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      console.error(`API再接続エラー: ${error instanceof Error ? error.message : 'Unknown error'}`);
       addNotification('バックエンドサーバーへの再接続に失敗しました', 'error');
     }
   }, [addNotification, checkConnection, refreshData]);
@@ -294,18 +174,10 @@ export default function Home() {
       try {
         localStorage.setItem('lastSelectedPath', path);
       } catch (e) {
-        logger.debug('LocalStorageへの保存エラー');
+        console.log('LocalStorageへの保存エラー');
       }
     }
   }, []);
-
-  // パフォーマンスマーク - データロード完了時
-  useEffect(() => {
-    if (typeof window !== 'undefined' && !isLoading && (projects || error)) {
-      window.performance.mark('data_loaded');
-      window.performance.measure('data_loading_time', 'home_component_mounted', 'data_loaded');
-    }
-  }, [isLoading, projects, error]);
 
   return (
     <main className="min-h-screen bg-background">
@@ -317,26 +189,40 @@ export default function Home() {
       />
       
       <div className="max-w-7xl mx-auto px-4 py-6">
-        {/* API状態表示 - 接続エラーの場合のみ表示 */}
-        {(!apiStatus.connected || apiStatus.loading) && (
-          <EnhancedAPIStatus onRetry={handleApiStatusRetry} />
+        {/* API接続エラー通知 */}
+        {!apiStatus.connected && (
+          <div className="mb-4 p-3 rounded bg-red-900 bg-opacity-30">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-red-500 mr-3" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+                <div>
+                  <p className="font-medium text-white">API接続エラー</p>
+                  <p className="text-sm text-gray-300">
+                    バックエンドサーバーに接続できません
+                  </p>
+                </div>
+              </div>
+              
+              <button
+                onClick={handleApiStatusRetry}
+                className="bg-white text-gray-800 px-3 py-1 rounded text-sm transition-colors hover:bg-gray-200"
+              >
+                再接続
+              </button>
+            </div>
+          </div>
         )}
         
         {/* 初期化エラー表示 */}
-        {!isInitializing && initError && initError.message.includes('接続できません') ? (
-          <ConnectionError 
-            onRetry={handleRetryConnection}
-            ports={triedPorts}
-            attempts={connectionAttempts}
-            lastError={initError.details?.message}
-          />
-        ) : !isInitializing && initError ? (
+        {!isInitializing && initError && (
           <ErrorMessage 
             message={initError.message} 
             details={initError.details}
-            onRetry={handleRetryConnection}
+            onRetry={handleApiStatusRetry}
           />
-        ) : null}
+        )}
         
         {/* データ取得エラー表示 */}
         {error && (
@@ -379,13 +265,6 @@ export default function Home() {
               metrics={metrics}
               isLoading={isLoading}
             />
-          </Suspense>
-        )}
-        
-        {/* 開発環境のみ環境情報表示 */}
-        {process.env.NODE_ENV === 'development' && (
-          <Suspense fallback={<div className="h-10" />}>
-            <ClientInfo />
           </Suspense>
         )}
       </div>

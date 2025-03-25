@@ -13,12 +13,12 @@
     "react/prop-types": "off",
     "@typescript-eslint/explicit-module-boundary-types": "off",
     "@typescript-eslint/no-explicit-any": "off",
-    "@typescript-eslint/no-unused-vars": "off",
+    "@typescript-eslint/no-unused-vars": "warn",
     "no-console": "off",
     "no-empty": "error",
     "react-hooks/rules-of-hooks": "error",
     "no-async-promise-executor": "error",
-    "react-hooks/exhaustive-deps": "off"
+    "react-hooks/exhaustive-deps": "warn"
   },
   "settings": {
     "react": {
