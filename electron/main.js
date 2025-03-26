@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, session, shell, protocol } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, session, shell, protocol, globalShortcut } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const isDev = require('electron-is-dev');
@@ -8,6 +8,37 @@ const fs = require('fs');
 const axios = require('axios');
 const os = require('os');
 const http = require('http');
+const chokidar = require('chokidar');
+
+// 設定ベースのアプローチ - 環境による分岐を最小化
+const config = {
+  // 環境変数またはコマンドライン引数から設定を読み込む
+  // デフォルト値は共通の挙動を示す
+  debug: process.env.DEBUG === 'true' || isDev,
+  openDevTools: process.env.OPEN_DEVTOOLS === 'true' || isDev,
+  apiPort: process.env.API_PORT || '8000',
+  watchFiles: true, // ファイル変更監視は常に有効（開発・本番共通）
+  optimizationEnabled: process.env.OPTIMIZATION === 'true' || false,
+  useExternalBackend: process.env.EXTERNAL_BACKEND === 'true' || process.env.USE_EXTERNAL_BACKEND === 'true'
+};
+
+// 安全なパス解決関数
+const getResourcePath = (relativePath) => {
+  try {
+    // app初期化状態をチェック
+    const isPackaged = app && typeof app.isPackaged === 'boolean' ? app.isPackaged : false;
+    
+    const rootPath = isPackaged 
+      ? path.join(process.resourcesPath, 'app.asar.unpacked')
+      : path.join(__dirname, '..');
+    
+    return path.join(rootPath, relativePath);
+  } catch (e) {
+    // エラー時はフォールバックパスを使用
+    console.warn('パス解決エラー:', e);
+    return path.join(__dirname, '..', relativePath);
+  }
+};
 
 // FastAPIバックエンドのプロセス
 let fastApiProcess = null;
@@ -16,7 +47,7 @@ let splashWindow = null;
 let appIsQuitting = false;
 
 // 現在のAPIベースURL
-global.apiBaseUrl = 'http://127.0.0.1:8000/api';
+global.apiBaseUrl = `http://127.0.0.1:${config.apiPort}/api`;
 
 // サーバー起動検出の状態管理
 let startupDetectionState = {
@@ -41,7 +72,7 @@ const setupPlatformOptimizations = () => {
     }
   } else if (process.platform === 'darwin') {
     // macOSの最適化
-    app.dock?.setIcon(path.join(__dirname, '../frontend/public/icon.png'));
+    app.dock?.setIcon(getResourcePath('src/public/favicon.ico'));
   }
   
   // 共通の最適化
@@ -158,6 +189,11 @@ const verifyApiConnection = async (port, maxRetries = 5) => {
 // FastAPIバックエンドを起動する関数
 async function startFastApi() {
   try {
+    // 外部バックエンドの使用確認
+    const useExternalBackend = process.env.EXTERNAL_BACKEND === 'true' || 
+                              process.env.USE_EXTERNAL_BACKEND === 'true' ||
+                              config.useExternalBackend;
+    
     // リセットオブジェクト状態
     startupDetectionState = {
       startupMessageDetected: false,
@@ -165,34 +201,79 @@ async function startFastApi() {
       connectionVerified: false
     };
 
+    // ポート情報を一時ファイルから読み込み
+    let selectedPort = parseInt(config.apiPort);
+    let portFilePath = path.join(os.tmpdir(), 'project_dashboard_port.txt');
+    
+    try {
+      if (fs.existsSync(portFilePath)) {
+        const portFromFile = fs.readFileSync(portFilePath, 'utf-8').trim();
+        if (portFromFile && !isNaN(parseInt(portFromFile))) {
+          selectedPort = parseInt(portFromFile);
+          console.log(`一時ファイルからポート ${selectedPort} を取得しました`);
+        }
+      }
+    } catch (err) {
+      console.warn('ポート情報ファイルの読み込みに失敗:', err.message);
+    }
+    
+    console.log(`バックエンドサーバー用にポート ${selectedPort} を選択しました`);
+    
+    // 外部バックエンドを使用する場合は、既存の接続をチェック
+    if (useExternalBackend) {
+      console.log('外部バックエンドモードを使用: バックエンドの起動をスキップします');
+      
+      // 接続確認
+      const isConnected = await verifyApiConnection(selectedPort, 3);
+      if (isConnected) {
+        console.log(`既存のバックエンドサーバーに接続成功（ポート: ${selectedPort}）`);
+        global.apiBaseUrl = `http://127.0.0.1:${selectedPort}/api`;
+        startupDetectionState.connectionVerified = true;
+        return selectedPort;
+      } else {
+        console.warn(`外部バックエンドへの接続に失敗しました（ポート: ${selectedPort}）`);
+        console.warn('内部バックエンド起動に切り替えます');
+      }
+    }
+
     // 既存のプロセスをクリーンアップ
     await cleanupExistingProcesses();
     
     // デフォルトポート設定
-    const selectedPort = 8000;
+    selectedPort = parseInt(config.apiPort);
     
     console.log(`バックエンドサーバー用にポート ${selectedPort} を選択しました`);
     
-    // ポート情報を一時ファイルに保存
-    const portFilePath = path.join(os.tmpdir(), 'project_dashboard_port.txt');
+    // ポート情報を一時ファイルに保存 - 変数の再宣言をなくし、上で宣言した変数を再利用
     try {
       fs.writeFileSync(portFilePath, selectedPort.toString());
     } catch (err) {
       console.warn('ポート情報ファイルの保存に失敗:', err.message);
     }
 
-    // 開発環境とビルド後の環境で実行パスを変更
-    const resourcesPath = isDev ? path.join(__dirname, '..') : path.join(process.resourcesPath, 'app.asar.unpacked');
-    
+    // 一貫したパス解決を使用
+    const backendDir = getResourcePath('backend');
+    const scriptPath = path.join(backendDir, 'app', 'main.py');
+
     // プラットフォームに応じたPythonパスの設定
     let pythonPath;
-    if (isDev) {
-      // 複数の可能性のあるパスを試行
+    
+    // 環境に応じて明確に分岐
+    if (app.isPackaged) {
+      // 本番環境では明示的なパスを使用
+      if (process.platform === 'win32') {
+        pythonPath = path.join(backendDir, 'venv', 'Scripts', 'python.exe');
+      } else {
+        pythonPath = path.join(backendDir, 'venv', 'bin', 'python');
+      }
+      console.log(`本番環境のPython実行パス: ${pythonPath}`);
+    } else {
+      // 開発環境ではパスを検出
       const possiblePaths = [
         'python',
         'python3',
-        path.join(process.cwd(), 'backend', 'venv', 'Scripts', 'python.exe'), // Windows向け
-        path.join(process.cwd(), 'backend', 'venv', 'bin', 'python') // Unix向け
+        path.join(backendDir, 'venv', 'Scripts', 'python.exe'),
+        path.join(backendDir, 'venv', 'bin', 'python')
       ];
       
       // 存在するパスを検出
@@ -202,13 +283,13 @@ async function startFastApi() {
             // コマンドの存在を確認
             require('child_process').execSync(`${p} --version`, {stdio: 'ignore'});
             pythonPath = p;
-            console.log(`Python実行パスを検出: ${pythonPath}`);
+            console.log(`開発環境のPython実行パス: ${pythonPath}`);
             break;
           } else {
             // ファイルの存在を確認
             if (fs.existsSync(p)) {
               pythonPath = p;
-              console.log(`Python実行パスを検出: ${pythonPath}`);
+              console.log(`開発環境のPython実行パス: ${pythonPath}`);
               break;
             }
           }
@@ -222,17 +303,7 @@ async function startFastApi() {
         pythonPath = 'python';
         console.log(`Python実行パスが見つからないため、デフォルト "${pythonPath}" を使用します`);
       }
-    } else {
-      // ビルド環境ではプラットフォームごとに適切なパスを選択
-      if (process.platform === 'win32') {
-        pythonPath = path.join(resourcesPath, 'backend', 'venv', 'Scripts', 'python.exe');
-      } else {
-        pythonPath = path.join(resourcesPath, 'backend', 'venv', 'bin', 'python');
-      }
     }
-    
-    const scriptPath = path.join(resourcesPath, 'backend', 'app', 'main.py');
-    const backendDir = path.join(resourcesPath, 'backend');
 
     // タイムアウト基準値
     const STARTUP_TIMEOUT = 30000;
@@ -254,7 +325,7 @@ async function startFastApi() {
         PYTHONOPTIMIZE: "1",
         FASTAPI_STARTUP_OPTIMIZE: "1",
         STREAMLINED_LOGGING: "1",
-        DEBUG: isDev ? "1" : "0"
+        DEBUG: config.debug ? "1" : "0"
       }
     });
 
@@ -415,24 +486,15 @@ function updateStartupProgress(message, progress) {
 // CSP設定を構成
 function setupContentSecurityPolicy() {
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    // 開発環境と本番環境で異なるCSP設定
-    const cspValue = isDev 
-      ? "default-src 'self'; " +
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
-        "style-src 'self' 'unsafe-inline'; " +
-        "img-src 'self' data:; " +
-        "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*; " +
-        "font-src 'self'; " +
-        "object-src 'none'; " +
-        "base-uri 'self';"
-      : "default-src 'self'; " +
-        "script-src 'self' 'unsafe-inline'; " +
-        "style-src 'self' 'unsafe-inline'; " +
-        "img-src 'self' data:; " +
-        "connect-src 'self' http://127.0.0.1:*; " +
-        "font-src 'self'; " +
-        "object-src 'none'; " +
-        "base-uri 'self';";
+    // 開発環境と本番環境で同じCSP設定
+    const cspValue = "default-src 'self'; " +
+      "script-src 'self' 'unsafe-inline'; " +
+      "style-src 'self' 'unsafe-inline'; " +
+      "img-src 'self' data:; " +
+      "connect-src 'self' http://127.0.0.1:*; " +
+      "font-src 'self'; " +
+      "object-src 'none'; " +
+      "base-uri 'self';";
     
     callback({
       responseHeaders: {
@@ -441,6 +503,83 @@ function setupContentSecurityPolicy() {
       }
     });
   });
+}
+
+// 安全なファイルプロトコル設定
+function setupSecureFileProtocol() {
+  // ファイルプロトコルハンドラーを登録 - 開発/本番共通
+  protocol.registerFileProtocol('file', (request, callback) => {
+    // URLデコードとセキュリティチェック
+    const url = decodeURIComponent(request.url.substr(7)); // 'file://'を除去
+    const normalizedPath = path.normalize(url);
+    
+    // プロジェクトルート基準の相対パス解決
+    const rootPath = getResourcePath('.');
+    let resolvedPath;
+    
+    if (normalizedPath.startsWith(rootPath)) {
+      // プロジェクト内パスの場合は直接使用
+      resolvedPath = normalizedPath;
+    } else {
+      // 相対パスの場合はビルドディレクトリからの解決
+      resolvedPath = path.join(rootPath, 'build', normalizedPath);
+    }
+    
+    callback({ path: resolvedPath });
+  });
+}
+
+// 開発と本番の両方で使用するファイル監視設定
+function setupDevelopmentEnvironment() {
+  // 共通のファイル監視ロジック（開発/本番で同じコード）
+  const watcher = chokidar.watch(getResourcePath('build'), {
+    ignored: /(^|[\/\\])\../,
+    persistent: true
+  });
+  
+  // ファイル変更を検知したらメインウィンドウを再読み込み
+  watcher.on('change', (changedPath) => {
+    console.log(`ファイルが変更されました: ${changedPath}`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      console.log('ウィンドウを再読み込みします...');
+      mainWindow.webContents.reloadIgnoringCache();
+    }
+  });
+  
+  // アプリ終了時にウォッチャーを閉じる
+  app.on('before-quit', () => {
+    watcher.close();
+  });
+}
+
+// グローバルショートカットを登録
+function registerGlobalShortcuts() {
+  globalShortcut.register('CommandOrControl+R', () => {
+    // データ更新ショートカット
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('shortcut-refresh-data');
+    }
+  });
+  
+  globalShortcut.register('CommandOrControl+O', () => {
+    // ファイル選択ショートカット
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('shortcut-select-file');
+    }
+  });
+  
+  // デバッグツールショートカット - 設定に基づいて制御
+  if (config.debug) {
+    globalShortcut.register('F12', () => {
+      if (mainWindow) {
+        if (mainWindow.webContents.isDevToolsOpened()) {
+          mainWindow.webContents.closeDevTools();
+        } else {
+          mainWindow.webContents.openDevTools();
+        }
+      }
+    });
+  }
 }
 
 // メインウィンドウを作成する関数
@@ -465,7 +604,7 @@ function createWindow() {
   });
 
   // 静的ファイルの存在確認
-  const staticPath = path.join(__dirname, '../frontend/out/index.html');
+  const staticPath = getResourcePath('build/index.html');
   try {
     if (!fs.existsSync(staticPath)) {
       console.error(`エラー: 静的ファイルが見つかりません: ${staticPath}`);
@@ -478,7 +617,7 @@ function createWindow() {
             type: 'error',
             title: '起動エラー',
             message: '静的ファイルが見つかりません',
-            detail: '開発モードでもビルド済みの静的ファイルが必要です。\n\nnpm run build コマンドを実行してください。',
+            detail: '静的ファイルが必要です。\n\nnpm run build コマンドを実行してください。',
             buttons: ['OK']
           });
           app.quit();
@@ -490,8 +629,8 @@ function createWindow() {
     console.error('ファイル確認エラー:', err);
   }
 
-  // 静的ファイルをロード（開発モード・本番モード共通）
-  const url = `file://${path.join(__dirname, '../frontend/out/index.html')}`;
+  // 静的ファイルをロード（開発/本番で同じパス）
+  const url = `file://${staticPath}`;
   mainWindow.loadURL(url);
   
   // メインウィンドウの準備完了時の処理
@@ -513,7 +652,7 @@ function createWindow() {
   
   // Electron APIが準備完了になったことをレンダラープロセスに通知
   mainWindow.webContents.on('did-finish-load', () => {
-    // 修正: より確実にグローバル変数を設定
+    // より確実にグローバル変数を設定
     mainWindow.webContents.executeJavaScript(`
       try {
         // グローバル変数の設定
@@ -540,35 +679,9 @@ function createWindow() {
     });
   });
 
-  // 開発ツールを開く（開発環境のみ）
-  if (isDev) {
+  // 開発ツールを設定ベースで開く
+  if (config.openDevTools) {
     mainWindow.webContents.openDevTools();
-  }
-
-  // ファイル変更を監視して自動リロード（開発モードのみ）
-  if (isDev) {
-    try {
-      const chokidar = require('chokidar');
-      const watcher = chokidar.watch(path.join(__dirname, '../out'), {
-        ignored: /(^|[\/\\])\../, // ドットファイルを無視
-        persistent: true
-      });
-      
-      watcher.on('change', (changedPath) => {
-        console.log(`ファイルが変更されました: ${changedPath}`);
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          console.log('ウィンドウを再読み込みします...');
-          mainWindow.webContents.reloadIgnoringCache();
-        }
-      });
-      
-      // アプリ終了時にウォッチャーを閉じる
-      app.on('before-quit', () => {
-        watcher.close();
-      });
-    } catch (err) {
-      console.error('ファイル監視エラー:', err);
-    }
   }
 
   // ウィンドウが閉じられたときの処理
@@ -577,38 +690,82 @@ function createWindow() {
   });
 }
 
+// 共通の環境変数設定
+const setupEnvironmentVariables = () => {
+  // パス情報 - 開発/本番で同じ基準
+  process.env.APP_ROOT = getResourcePath('.');
+  process.env.BUILD_PATH = getResourcePath('build');
+  process.env.DATA_PATH = getResourcePath('data');
+  
+  // APIポート - 常に同じポートを使用
+  process.env.API_PORT = config.apiPort;
+  
+  // コンソールに明示的に出力
+  console.log('環境変数設定:');
+  console.log(`- APP_ROOT: ${process.env.APP_ROOT}`);
+  console.log(`- BUILD_PATH: ${process.env.BUILD_PATH}`);
+  console.log(`- API_PORT: ${process.env.API_PORT}`);
+};
+
 // 起動シーケンス最適化
 const optimizedStartup = async () => {
   try {
-    // プラットフォーム最適化を先行適用
+    // 1. 環境変数設定
+    setupEnvironmentVariables();
+    
+    // 2. プラットフォーム最適化を先行適用
     setupPlatformOptimizations();
     
-    // パラレル初期化: スプラッシュ画面とバックエンド起動を並列実行
+    // 3. スプラッシュ画面表示
     createSplashWindow();
     updateStartupProgress('アプリケーションを初期化中...', 10);
     
-    // メインウィンドウを先に作成開始
-    updateStartupProgress('ウィンドウを準備中...', 30);
-    createWindow();
+    // 4. ファイルプロトコル設定
+    setupSecureFileProtocol();
     
-    // バックエンドサーバー起動 - バックグラウンドで実行
-    updateStartupProgress('バックエンドサーバーを起動中...', 50);
+    // 5. 事前チェック: 静的ファイルが存在するか確認
+    const staticPath = getResourcePath('build/index.html');
+    if (!fs.existsSync(staticPath)) {
+      throw new Error(`静的ファイルが見つかりません: ${staticPath}`);
+    }
+    
+    // 6. 並列処理: バックエンド起動とメインウィンドウ初期化を並行
+    updateStartupProgress('バックエンドサーバーを起動中...', 30);
     console.log('バックエンドサーバーを起動しています...');
-    const port = await startFastApi();
+    const startupPromises = [
+      startFastApi().catch(error => {
+        console.error('バックエンド起動エラー:', error);
+        throw error;
+      }),
+      
+      new Promise(resolve => {
+        updateStartupProgress('ウィンドウを準備中...', 50);
+        createWindow();
+        resolve();
+      })
+    ];
+    
+    // 7. 並列処理の完了を待機
+    const [port] = await Promise.all(startupPromises);
     console.log(`バックエンドサーバーが起動しました (ポート: ${port})`);
     
+    // 8. 開発環境セットアップ
+    setupDevelopmentEnvironment();
+    
+    // 9. グローバルショートカット登録
+    registerGlobalShortcuts();
+    
+    // 10. 接続確立
     updateStartupProgress('接続を確立中...', 70);
+    if (mainWindow) {
+      // APIポート情報を環境変数から一貫して取得
+      mainWindow.webContents.send('api-connection-established', {
+        port: port,
+        apiUrl: `http://127.0.0.1:${port}/api`
+      });
+    }
     
-    // 接続確立をフロントエンドに通知 - 遅延実行
-    setTimeout(() => {
-      if (mainWindow) {
-        mainWindow.webContents.send('api-connection-established', {
-          port: port,
-          apiUrl: `http://127.0.0.1:${port}/api`
-        });
-      }
-    }, 1000);
-    
+    // 11. 起動完了
     updateStartupProgress('アプリケーションを起動中...', 90);
     
   } catch (error) {
@@ -647,7 +804,20 @@ ipcMain.handle('api:request', async (event, method, path, params, data, options)
     try {
       // APIベースURLの取得
       const baseUrl = global.apiBaseUrl;
-      const url = new URL(path.startsWith('/') ? path.substring(1) : path, baseUrl);
+      
+      // パスの修正 - /apiが既に含まれているか確認
+      let apiPath = path;
+      if (!path.startsWith('/api/')) {
+        // /で始まる場合は/apiを前置
+        if (path.startsWith('/')) {
+          apiPath = `/api${path}`;
+        } else {
+          // それ以外は/api/を前置
+          apiPath = `/api/${path}`;
+        }
+      }
+      
+      const url = new URL(apiPath.startsWith('/') ? apiPath.substring(1) : apiPath, baseUrl);
       
       // パラメータの追加
       if (params) {
@@ -707,43 +877,30 @@ ipcMain.handle('api:request', async (event, method, path, params, data, options)
   }
 });
 
+// ショートカットメッセージの処理
+ipcMain.on('shortcut-refresh-data', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('shortcut-refresh-data');
+  }
+});
+
+ipcMain.on('shortcut-select-file', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('shortcut-select-file');
+  }
+});
+
 // アプリケーションの準備完了時に最適化された起動シーケンスを実行
 app.whenReady().then(() => {
-  // protocol handlerを追加 - パス解決を改善
-  protocol.registerFileProtocol('file', (request, callback) => {
-    let url = request.url.substr(7); // 'file://'を除去
-    
-    // URLデコード（スペースや特殊文字の処理）
-    url = decodeURIComponent(url);
-    
-    // パス正規化とセキュリティチェック
-    const normalizedPath = path.normalize(url);
-    
-    // アプリケーションのルートパスを基準にする
-    const rootPath = path.join(__dirname, '..');
-    
-    // 相対パスの解決
-    let filePath;
-    if (normalizedPath.startsWith('/')) {
-      // ルートからの相対パスの場合
-      filePath = path.join(rootPath, 'out', normalizedPath);
-    } else {
-      // その他の場合は通常の結合
-      filePath = path.join(rootPath, normalizedPath);
-    }
-    
-    callback({ path: filePath });
-  });
-  
   optimizedStartup().catch(err => {
     console.error('致命的な起動エラー:', err);
     app.quit();
   });
 });
 
-// F12キーでデバッグツールを開く
+// F12キーでデバッグツールを開く - 設定ベース
 ipcMain.on('toggle-devtools', () => {
-  if (mainWindow) {
+  if (mainWindow && config.debug) {
     if (mainWindow.webContents.isDevToolsOpened()) {
       mainWindow.webContents.closeDevTools();
     } else {
@@ -762,7 +919,7 @@ app.on('window-all-closed', async () => {
       
       // まずAPIエンドポイントで正常終了を試みる
       try {
-        const apiUrl = global.apiBaseUrl || 'http://localhost:8000/api';
+        const apiUrl = global.apiBaseUrl || `http://localhost:${config.apiPort}/api`;
         await axios.post(`${apiUrl}/shutdown`, {
           timeout: 2000
         });
@@ -794,6 +951,9 @@ app.on('window-all-closed', async () => {
       console.error('FastAPIプロセス終了中のエラー:', err);
     }
   }
+
+  // グローバルショートカットの解除
+  globalShortcut.unregisterAll();
 
   // MacOSではアプリケーションが明示的に終了されるまでアクティブにする（標準的な挙動）
   if (process.platform !== 'darwin') {
