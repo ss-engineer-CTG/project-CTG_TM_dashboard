@@ -1,110 +1,150 @@
 {
-    "name": "project-dashboard",
-    "version": "0.1.0",
-    "description": "プロジェクト管理ダッシュボードアプリケーション",
-    "author": "Your Name <your-email@example.com>",
-    "private": true,
-    "main": "electron/main.js",
-    "scripts": {
-      "clean": "rimraf build",
-      "build": "npm run clean && webpack --mode production",
-      "build:dev": "webpack --mode development",
-      "build:watch": "webpack --mode development --watch",
-      "electron": "electron .",
-      "dev": "concurrently \"npm run build:watch\" \"npm run electron\"",
-      "start": "npm run build:dev && electron .",
-      "electron-pack": "npm run build && electron-builder",
-      "postinstall": "electron-builder install-app-deps"
+  "name": "project-dashboard",
+  "version": "0.1.0",
+  "description": "プロジェクト管理ダッシュボードアプリケーション",
+  "author": "Your Name <your-email@example.com>",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "clean": "rimraf build dist",
+    "build": "npm run clean && webpack --mode production",
+    "build:dev": "webpack --mode development",
+    "build:watch": "webpack --mode development --watch",
+    "electron": "electron .",
+    "dev": "concurrently \"npm run build:watch\" \"npm run electron\"",
+    "start": "npm run build:dev && electron .",
+    "pack:prepare": "npm run clean && npm run build && node scripts/prepare-packaging.js",
+    "electron-pack": "npm run pack:prepare && electron-builder",
+    "electron-pack:win": "npm run pack:prepare && electron-builder --win",
+    "electron-pack:win:full": "npm run pack:prepare && electron-builder --win",
+    "electron-pack:mac": "npm run pack:prepare && electron-builder --mac",
+    "electron-pack:linux": "npm run pack:prepare && electron-builder --linux",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "axios": "^1.6.2",
+    "chart.js": "^4.4.0",
+    "date-fns": "^2.30.0",
+    "electron-is-dev": "^2.0.0",
+    "find-process": "^1.4.10",
+    "react": "^18.2.0",
+    "react-chartjs-2": "^5.2.0",
+    "react-dom": "^18.2.0",
+    "react-query": "^3.39.3",
+    "react-router-dom": "^6.15.0",
+    "uuid": "^9.0.1",
+    "wait-on": "^7.2.0",
+    "zod": "^3.22.2",
+    "chokidar": "^3.5.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.5.7",
+    "@types/react": "^18.2.21",
+    "@types/react-dom": "^18.2.7",
+    "@types/uuid": "^9.0.2",
+    "autoprefixer": "^10.4.15",
+    "concurrently": "^8.2.2",
+    "css-loader": "^6.8.1",
+    "electron": "^28.3.3",
+    "electron-builder": "^24.13.3",
+    "electron-rebuild": "^3.2.0",
+    "file-loader": "^6.2.0",
+    "fork-ts-checker-webpack-plugin": "^8.0.0",
+    "html-webpack-plugin": "^5.5.3",
+    "postcss": "^8.4.28",
+    "postcss-loader": "^7.3.3",
+    "rimraf": "^5.0.1",
+    "style-loader": "^3.3.3",
+    "tailwindcss": "^3.3.3",
+    "ts-loader": "^9.4.4",
+    "typescript": "^5.1.6",
+    "webpack": "^5.88.2",
+    "webpack-bundle-analyzer": "^4.9.0",
+    "webpack-cli": "^5.1.4",
+    "webpack-dev-server": "^4.15.1"
+  },
+  "build": {
+    "appId": "com.company.project-dashboard",
+    "productName": "Project Dashboard",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
     },
-    "dependencies": {
-      "axios": "^1.6.2",
-      "chart.js": "^4.4.0",
-      "date-fns": "^2.30.0",
-      "electron-is-dev": "^2.0.0",
-      "find-process": "^1.4.10",
-      "react": "^18.2.0",
-      "react-chartjs-2": "^5.2.0",
-      "react-dom": "^18.2.0",
-      "react-query": "^3.39.3",
-      "react-router-dom": "^6.15.0",
-      "uuid": "^9.0.1",
-      "wait-on": "^7.2.0",
-      "zod": "^3.22.2"
-    },
-    "devDependencies": {
-      "@types/node": "^20.5.7",
-      "@types/react": "^18.2.21",
-      "@types/react-dom": "^18.2.7",
-      "@types/uuid": "^9.0.2",
-      "autoprefixer": "^10.4.15",
-      "chokidar": "^3.5.3",
-      "concurrently": "^8.2.2",
-      "css-loader": "^6.8.1",
-      "electron": "^28.3.3",
-      "electron-builder": "^24.13.3",
-      "file-loader": "^6.2.0",
-      "fork-ts-checker-webpack-plugin": "^8.0.0",
-      "html-webpack-plugin": "^5.5.3",
-      "postcss": "^8.4.28",
-      "postcss-loader": "^7.3.3",
-      "rimraf": "^5.0.1",
-      "style-loader": "^3.3.3",
-      "tailwindcss": "^3.3.3",
-      "ts-loader": "^9.4.4",
-      "typescript": "^5.1.6",
-      "webpack": "^5.88.2",
-      "webpack-bundle-analyzer": "^4.9.0",
-      "webpack-cli": "^5.1.4",
-      "webpack-dev-server": "^4.15.1"
-    },
-    "build": {
-      "appId": "com.company.project-dashboard",
-      "productName": "Project Dashboard",
-      "directories": {
-        "output": "dist"
+    "files": [
+      "electron/**/*",
+      "build/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend",
+        "to": "app.asar.unpacked/backend",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/*.pyo",
+          "!**/.git/**",
+          "!**/.vscode/**",
+          "!**/.idea/**"
+        ]
       },
-      "files": [
-        "electron/**/*",
-        "build/**/*",
-        "package.json"
-      ],
-      "extraResources": [
-        {
-          "from": "backend",
-          "to": "app.asar.unpacked/backend",
-          "filter": [
-            "**/*"
-          ]
-        },
-        {
-          "from": "data",
-          "to": "app.asar.unpacked/data",
-          "filter": [
-            "**/*"
-          ]
-        }
-      ],
-      "win": {
-        "target": [
-          "nsis"
-        ],
-        "icon": "src/public/favicon.ico"
+      {
+        "from": "data",
+        "to": "app.asar.unpacked/data",
+        "filter": [
+          "**/*"
+        ]
       },
-      "mac": {
-        "target": [
-          "dmg"
-        ],
-        "icon": "src/public/favicon.ico"
-      },
-      "linux": {
-        "target": [
-          "AppImage"
-        ],
-        "icon": "src/public/favicon.ico"
-      },
-      "nsis": {
-        "oneClick": false,
-        "allowToChangeInstallationDirectory": true
+      {
+        "from": "build",
+        "to": "app.asar.unpacked/build",
+        "filter": [
+          "**/*"
+        ]
       }
-    }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "src/public/favicon.ico"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "icon": "src/public/favicon.ico",
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "src/public/favicon.ico",
+      "category": "Development"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "runAfterFinish": true
+    },
+    "dmg": {
+      "background": "src/public/dmg-background.png",
+      "window": {
+        "width": 540,
+        "height": 380
+      }
+    },
+    "publish": null,
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/find-process",
+      "node_modules/chokidar",
+      "build",
+      "backend",
+      "data"
+    ]
   }
+}

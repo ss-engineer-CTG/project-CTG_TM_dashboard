@@ -8,7 +8,6 @@ const fs = require('fs');
 const axios = require('axios');
 const os = require('os');
 const http = require('http');
-const chokidar = require('chokidar');
 
 // 設定ベースのアプローチ - 環境による分岐を最小化
 const config = {
@@ -17,7 +16,7 @@ const config = {
   debug: process.env.DEBUG === 'true' || isDev,
   openDevTools: process.env.OPEN_DEVTOOLS === 'true' || isDev,
   apiPort: process.env.API_PORT || '8000',
-  watchFiles: true, // ファイル変更監視は常に有効（開発・本番共通）
+  watchFiles: !app.isPackaged && (process.env.WATCH_FILES !== 'false'), // 本番環境では無効化
   optimizationEnabled: process.env.OPTIMIZATION === 'true' || false,
   useExternalBackend: process.env.EXTERNAL_BACKEND === 'true' || process.env.USE_EXTERNAL_BACKEND === 'true'
 };
@@ -28,11 +27,32 @@ const getResourcePath = (relativePath) => {
     // app初期化状態をチェック
     const isPackaged = app && typeof app.isPackaged === 'boolean' ? app.isPackaged : false;
     
-    const rootPath = isPackaged 
-      ? path.join(process.resourcesPath, 'app.asar.unpacked')
-      : path.join(__dirname, '..');
+    let rootPath;
+    if (isPackaged) {
+      // パッケージ化された環境では、リソースパスを app.asar.unpacked に明示的に指定
+      rootPath = path.join(process.resourcesPath, 'app.asar.unpacked');
+      console.log(`パッケージ環境でのリソースパス基点: ${rootPath}`);
+    } else {
+      // 開発環境
+      rootPath = path.join(__dirname, '..');
+      console.log(`開発環境でのリソースパス基点: ${rootPath}`);
+    }
     
-    return path.join(rootPath, relativePath);
+    const resolvedPath = path.join(rootPath, relativePath);
+    
+    // 開発モードでのみログを出力
+    if (isDev || process.env.DEBUG === 'true') {
+      console.log(`リソースパス解決: ${relativePath} -> ${resolvedPath}`);
+      
+      // パスが存在するか確認（デバッグ用）
+      if (fs.existsSync(resolvedPath)) {
+        console.log(`パスが存在します: ${resolvedPath}`);
+      } else {
+        console.warn(`パスが存在しません: ${resolvedPath}`);
+      }
+    }
+    
+    return resolvedPath;
   } catch (e) {
     // エラー時はフォールバックパスを使用
     console.warn('パス解決エラー:', e);
@@ -529,9 +549,26 @@ function setupSecureFileProtocol() {
   });
 }
 
-// 開発と本番の両方で使用するファイル監視設定
+// 開発と本番環境で異なるファイル監視の設定
 function setupDevelopmentEnvironment() {
-  // 共通のファイル監視ロジック（開発/本番で同じコード）
+  // 本番環境では何もしない
+  if (app.isPackaged || !config.watchFiles) {
+    console.log('本番環境またはファイル監視無効モードのため、ファイル監視はスキップします');
+    return;
+  }
+
+  // 開発環境のみで必要なモジュールを動的にロード
+  let chokidar;
+  try {
+    chokidar = require('chokidar');
+  } catch (err) {
+    console.warn('chokidarモジュールを読み込めませんでした。ファイル監視は無効化されます:', err.message);
+    return;
+  }
+
+  console.log('ファイル監視を設定中...');
+  
+  // 開発環境のみでファイル監視を設定
   const watcher = chokidar.watch(getResourcePath('build'), {
     ignored: /(^|[\/\\])\../,
     persistent: true
@@ -749,7 +786,7 @@ const optimizedStartup = async () => {
     const [port] = await Promise.all(startupPromises);
     console.log(`バックエンドサーバーが起動しました (ポート: ${port})`);
     
-    // 8. 開発環境セットアップ
+    // 8. 開発環境セットアップ（本番環境では無効）
     setupDevelopmentEnvironment();
     
     // 9. グローバルショートカット登録
