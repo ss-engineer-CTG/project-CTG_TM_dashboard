@@ -1,5 +1,6 @@
 """
-プロジェクト管理データの処理モジュール
+プロジェクト管理データの処理モジュール - 最適化版
+- 非同期処理と遅延インポートを活用して起動時間を短縮
 - データの読み込みと処理
 - 進捗計算
 - 遅延検出
@@ -7,15 +8,12 @@
 """
 
 import os
-import pandas as pd
-import datetime
 import logging
 import functools
 import time
 from typing import Optional, Dict, Any, List
 import traceback
 from pathlib import Path
-import concurrent.futures
 
 # ロガー設定
 logger = logging.getLogger(__name__)
@@ -24,10 +22,16 @@ handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s -
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
-# インメモリキャッシュ - TTLと容量制限つき
-_data_cache = {}
-_cache_stats = {'hits': 0, 'misses': 0}
-_MAX_CACHE_ENTRIES = 50
+# 非同期ローダーをインポート
+from .async_loader import (
+    lazy_import, import_pandas, import_numpy, import_datetime,
+    run_in_threadpool, async_cache_result, register_init_task
+)
+
+# 必要なモジュールを遅延インポート
+pd = None
+datetime = None
+concurrent = None
 
 # デフォルトカラー定義（参考用）
 COLORS = {
@@ -39,6 +43,34 @@ COLORS = {
         'neutral': '#c8c8c8'
     }
 }
+
+# インメモリキャッシュ - TTLと容量制限つき
+_data_cache = {}
+_cache_stats = {'hits': 0, 'misses': 0}
+_MAX_CACHE_ENTRIES = 50
+
+# データファイルのデフォルトパスをプリキャッシュ
+_default_dashboard_path = None
+
+
+@register_init_task
+async def initialize_data_processing():
+    """データ処理モジュールの初期化"""
+    global pd, datetime, concurrent, _default_dashboard_path
+    
+    # 必要なモジュールをバックグラウンドでインポート
+    pd = import_pandas()
+    datetime = import_datetime()
+    concurrent_module = lazy_import("concurrent.futures")
+    concurrent = concurrent_module.futures
+    
+    # デフォルトパスを非同期で解決
+    _default_dashboard_path = await run_in_threadpool(resolve_dashboard_path)
+    
+    logger.info("データ処理モジュールの初期化が完了しました")
+    
+    return True
+
 
 def cache_result(ttl_seconds: int = 300, max_entries: int = _MAX_CACHE_ENTRIES):
     """関数の結果をキャッシュするデコレータ - 最適化版"""
@@ -81,6 +113,7 @@ def cache_result(ttl_seconds: int = 300, max_entries: int = _MAX_CACHE_ENTRIES):
         return wrapper
     return decorator
 
+
 def resolve_dashboard_path() -> str:
     """
     環境に応じたダッシュボードデータパスを解決
@@ -88,6 +121,11 @@ def resolve_dashboard_path() -> str:
     Returns:
         解決されたパス
     """
+    # グローバルにキャッシュされたパスがあれば使用
+    global _default_dashboard_path
+    if _default_dashboard_path is not None:
+        return _default_dashboard_path
+        
     # 検索するパスのリスト
     search_paths = []
     
@@ -98,6 +136,7 @@ def resolve_dashboard_path() -> str:
         # 絶対パスに変換して存在確認
         dashboard_path = str(Path(dashboard_path).resolve())
         if os.path.exists(dashboard_path):
+            _default_dashboard_path = dashboard_path
             return dashboard_path
         search_paths.append(dashboard_path)
     
@@ -106,7 +145,9 @@ def resolve_dashboard_path() -> str:
     if app_path:
         bundle_path = Path(app_path) / "data" / "exports" / "dashboard.csv"
         if bundle_path.exists():
-            return str(bundle_path)
+            path_str = str(bundle_path)
+            _default_dashboard_path = path_str
+            return path_str
         search_paths.append(str(bundle_path))
     
     # 3. 現在の作業ディレクトリからの相対パスを試行
@@ -129,21 +170,21 @@ def resolve_dashboard_path() -> str:
     # 重複を削除
     search_paths = list(dict.fromkeys(filter(None, search_paths)))
     
-    # パスを並列で検索
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(search_paths), 10)) as executor:
-        def check_path(path):
-            if os.path.exists(path):
-                return path
-            return None
-        
-        results = list(executor.map(check_path, search_paths))
-    
-    for result in results:
-        if result:
-            return result
+    # 並列なしで高速にパスを検索（起動時最適化のため）
+    for path in search_paths:
+        if os.path.exists(path):
+            _default_dashboard_path = path
+            return path
     
     # 4. サンプルデータを提供
     logger.warning(f"ダッシュボードファイルが見つかりません。サンプルデータを返します。")
+    
+    # 遅延インポート
+    global pd, datetime
+    if pd is None:
+        pd = import_pandas()
+    if datetime is None:
+        datetime = import_datetime()
     
     # サンプルデータを生成してCSVを作成
     try:
@@ -200,18 +241,24 @@ def resolve_dashboard_path() -> str:
         projects_path = temp_dir / "sample_projects.csv"
         sample_projects.to_csv(projects_path, index=False, encoding='utf-8-sig')
         
-        return str(sample_path)
+        path_str = str(sample_path)
+        _default_dashboard_path = path_str
+        return path_str
     except Exception as e:
         logger.error(f"サンプルデータ作成エラー: {str(e)}")
         traceback.print_exc()
         
         # 最終的には最初のパスを返す（存在しなくても）
-        return str(fallback_paths[0])  # 最初のパスを返す
+        path_str = str(fallback_paths[0])
+        _default_dashboard_path = path_str
+        return path_str
+
 
 @cache_result(ttl_seconds=60)  # 60秒キャッシュ
-def load_and_process_data(dashboard_file_path: Optional[str] = None) -> pd.DataFrame:
+def load_and_process_data(dashboard_file_path: Optional[str] = None):
     """
     データの読み込みと処理 - 最適化版
+    同期版のロード関数（内部で非同期版を呼び出す）
     
     Args:
         dashboard_file_path: ダッシュボードCSVファイルパス
@@ -219,6 +266,11 @@ def load_and_process_data(dashboard_file_path: Optional[str] = None) -> pd.DataF
     Returns:
         処理済みのデータフレーム
     """
+    # 遅延インポート
+    global pd
+    if pd is None:
+        pd = import_pandas()
+    
     try:
         # パスが指定されていない場合はデフォルトパスを使用
         if not dashboard_file_path:
@@ -253,66 +305,44 @@ def load_and_process_data(dashboard_file_path: Optional[str] = None) -> pd.DataF
                 })
                 return error_df
         
-        # ファイルの読み込み - 並列エンコーディング試行
+        # 効率的なエンコーディング検出と読み込み
         df = None
-        encoding_results = {}
-        
-        # 効率的なエンコーディング検出
+        encoding_errors = []
         encodings = ['utf-8-sig', 'utf-8', 'cp932', 'shift-jis']
         
-        # 並列でエンコーディングを試行
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(encodings)) as executor:
-            def try_encoding(encoding):
-                try:
-                    return encoding, pd.read_csv(dashboard_path, encoding=encoding)
-                except Exception as e:
-                    return encoding, str(e)
-            
-            # 並列で試行
-            encoding_results = dict(executor.map(lambda enc: try_encoding(enc), encodings))
-        
-        # 結果を処理
-        for encoding, result in encoding_results.items():
-            if isinstance(result, pd.DataFrame):
-                df = result
+        # 順次試行（高速化のため並列処理は使わない）
+        for encoding in encodings:
+            try:
+                df = pd.read_csv(dashboard_path, encoding=encoding)
                 break
+            except Exception as e:
+                encoding_errors.append(f"{encoding}: {str(e)}")
         
         if df is None:
-            errors = [f"{enc}: {err}" for enc, err in encoding_results.items() if isinstance(err, str)]
-            logger.error(f"すべてのエンコーディングで読み込みに失敗: {errors}")
+            logger.error(f"すべてのエンコーディングで読み込みに失敗: {encoding_errors}")
             return pd.DataFrame({
                 "error": ["CSVファイルの読み込みに失敗しました。以下のエンコーディングを試しましたが失敗しました:"],
-                "details": ["\n".join(errors)]
+                "details": ["\n".join(encoding_errors)]
             })
         
         # 成功したらプロジェクトデータも読み込み
         projects_file_path = str(dashboard_path).replace('dashboard.csv', 'projects.csv')
         
-        if not os.path.exists(projects_file_path):
-            # ダッシュボードデータのみ返す
-            return df
-            
-        # プロジェクトデータの読み込み
-        try:
-            # 成功したエンコーディングを使用
+        if os.path.exists(projects_file_path):
+            # プロジェクトデータの読み込み
             try:
-                for encoding in encodings:
-                    if isinstance(encoding_results.get(encoding), pd.DataFrame):
-                        break
-            except:
-                encoding = 'utf-8-sig'  # フォールバック
-            
-            projects_df = pd.read_csv(projects_file_path, encoding=encoding)
-            
-            # データの結合
-            df = pd.merge(
-                df,
-                projects_df[['project_id', 'project_path', 'ganttchart_path']],
-                on='project_id',
-                how='left'
-            )
-        except Exception as e:
-            logger.warning(f"プロジェクトデータの読み込みエラー: {e}")
+                # エンコーディングの再利用
+                projects_df = pd.read_csv(projects_file_path, encoding=encoding)
+                
+                # データの結合
+                df = pd.merge(
+                    df,
+                    projects_df[['project_id', 'project_path', 'ganttchart_path']],
+                    on='project_id',
+                    how='left'
+                )
+            except Exception as e:
+                logger.warning(f"プロジェクトデータの読み込みエラー: {e}")
         
         # 日付列の処理
         date_columns = ['task_start_date', 'task_finish_date', 'created_at']
@@ -329,7 +359,22 @@ def load_and_process_data(dashboard_file_path: Optional[str] = None) -> pd.DataF
         logger.error(f"データ読み込み総合エラー: {e}")
         return pd.DataFrame({"error": [f"データ読み込み処理中にエラーが発生しました: {str(e)}"]})
 
-def check_delays(df: pd.DataFrame) -> pd.DataFrame:
+
+async def async_load_and_process_data(dashboard_file_path: Optional[str] = None):
+    """
+    データの読み込みと処理 - 非同期版
+    
+    Args:
+        dashboard_file_path: ダッシュボードCSVファイルパス
+        
+    Returns:
+        処理済みのデータフレーム
+    """
+    # スレッドプールで実行
+    return await run_in_threadpool(load_and_process_data, dashboard_file_path)
+
+
+def check_delays(df):
     """
     遅延タスクの検出
     
@@ -339,14 +384,20 @@ def check_delays(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         遅延タスクのデータフレーム
     """
+    # 遅延インポート
+    global datetime
+    if datetime is None:
+        datetime = import_datetime()
+        
     current_date = datetime.datetime.now()
     return df[
         (df['task_finish_date'] < current_date) & 
         (df['task_status'] != '完了')
     ]
 
+
 @cache_result(ttl_seconds=60)  # 1分キャッシュ
-def get_delayed_projects_count(df: pd.DataFrame) -> int:
+def get_delayed_projects_count(df) -> int:
     """
     遅延プロジェクト数を計算
     遅延タスクを持つプロジェクトの数を返す
@@ -360,8 +411,9 @@ def get_delayed_projects_count(df: pd.DataFrame) -> int:
     delayed_tasks = check_delays(df)
     return len(delayed_tasks['project_id'].unique())
 
+
 @cache_result(ttl_seconds=60)  # 1分キャッシュ
-def calculate_progress(df: pd.DataFrame) -> pd.DataFrame:
+def calculate_progress(df):
     """
     プロジェクト進捗の計算 - パフォーマンス最適化版
     
@@ -371,6 +423,13 @@ def calculate_progress(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         プロジェクト進捗のデータフレーム
     """
+    # 遅延インポート
+    global pd, datetime
+    if pd is None:
+        pd = import_pandas()
+    if datetime is None:
+        datetime = import_datetime()
+        
     try:
         # 空のデータフレームまたはエラーメッセージを含むデータフレームのチェック
         if df.empty:
@@ -423,88 +482,51 @@ def calculate_progress(df: pd.DataFrame) -> pd.DataFrame:
                 'duration': [0]
             })
         
-        # 最適化: 並列処理でプロジェクトごとの集計を高速化
-        project_ids = df['project_id'].unique()
+        # プロジェクト数が少ない場合はpandasの通常処理を使用 - 高速化
+        project_groups = df.groupby('project_id')
         
-        # マルチスレッド処理を部分適用（プロジェクト数が多い場合のみ）
-        if len(project_ids) > 10:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(project_ids), 20)) as executor:
-                def process_project(project_id):
-                    try:
-                        project_df = df[df['project_id'] == project_id]
-                        
-                        return {
-                            'project_id': project_id,
-                            'project_name': project_df['project_name'].iloc[0] if not project_df.empty else 'Unknown',
-                            'process': project_df['process'].iloc[0] if 'process' in project_df.columns and not project_df.empty else '',
-                            'line': project_df['line'].iloc[0] if 'line' in project_df.columns and not project_df.empty else '',
-                            'total_tasks': len(project_df),
-                            'completed_tasks': (project_df['task_status'] == '完了').sum(),
-                            'milestone_count': project_df['task_milestone'].str.contains('○', na=False).sum() if 'task_milestone' in project_df.columns else 0,
-                            'start_date': project_df['task_start_date'].min(),
-                            'end_date': project_df['task_finish_date'].max(),
-                            'project_path': project_df['project_path'].iloc[0] if 'project_path' in project_df.columns and not project_df.empty else None,
-                            'ganttchart_path': project_df['ganttchart_path'].iloc[0] if 'ganttchart_path' in project_df.columns and not project_df.empty else None,
-                        }
-                    except Exception as e:
-                        logger.error(f"プロジェクト {project_id} の処理中にエラー: {e}")
-                        return None
-                
-                # 並列処理を実行
-                results = list(executor.map(process_project, project_ids))
-                
-                # Noneを除外
-                valid_results = [r for r in results if r is not None]
-                
-                # DataFrameに変換
-                project_progress = pd.DataFrame(valid_results)
-        else:
-            # プロジェクト数が少ない場合はpandasの通常処理を使用
-            # 先にプロジェクトごとにグループ化
-            project_groups = df.groupby('project_id')
-            
-            # マイルストーン数の計算を高速化
-            if 'task_milestone' in df.columns:
-                milestone_counts = project_groups['task_milestone'].apply(
-                    lambda x: x.str.contains('○', na=False).sum()
-                )
-            else:
-                milestone_counts = pd.Series(0, index=project_ids)
-            
-            # 完了タスク数の計算
-            completed_counts = project_groups['task_status'].apply(
-                lambda x: (x == '完了').sum()
+        # マイルストーン数の計算を高速化
+        if 'task_milestone' in df.columns:
+            milestone_counts = project_groups['task_milestone'].apply(
+                lambda x: x.str.contains('○', na=False).sum()
             )
-            
-            # 集計処理
-            agg_funcs = {
-                'project_name': 'first',
-                'task_id': 'count',
-            }
-            
-            # 必要なカラムのみ追加
-            if 'process' in df.columns:
-                agg_funcs['process'] = 'first'
-            if 'line' in df.columns:
-                agg_funcs['line'] = 'first'
-            if 'project_path' in df.columns:
-                agg_funcs['project_path'] = 'first'
-            if 'ganttchart_path' in df.columns:
-                agg_funcs['ganttchart_path'] = 'first'
-            
-            project_progress = project_groups.agg(agg_funcs).reset_index()
-            
-            # 集計結果にマイルストーン数と完了タスク数を追加
-            project_progress['milestone_count'] = project_progress['project_id'].map(milestone_counts)
-            project_progress['completed_tasks'] = project_progress['project_id'].map(completed_counts)
-            project_progress['total_tasks'] = project_progress['task_id']
-            
-            # 開始日と終了日の取得
-            start_dates = project_groups['task_start_date'].min()
-            end_dates = project_groups['task_finish_date'].max()
-            
-            project_progress['start_date'] = project_progress['project_id'].map(start_dates)
-            project_progress['end_date'] = project_progress['project_id'].map(end_dates)
+        else:
+            milestone_counts = pd.Series(0, index=df['project_id'].unique())
+        
+        # 完了タスク数の計算
+        completed_counts = project_groups['task_status'].apply(
+            lambda x: (x == '完了').sum()
+        )
+        
+        # 集計処理
+        agg_funcs = {
+            'project_name': 'first',
+            'task_id': 'count',
+        }
+        
+        # 必要なカラムのみ追加
+        if 'process' in df.columns:
+            agg_funcs['process'] = 'first'
+        if 'line' in df.columns:
+            agg_funcs['line'] = 'first'
+        if 'project_path' in df.columns:
+            agg_funcs['project_path'] = 'first'
+        if 'ganttchart_path' in df.columns:
+            agg_funcs['ganttchart_path'] = 'first'
+        
+        project_progress = project_groups.agg(agg_funcs).reset_index()
+        
+        # 集計結果にマイルストーン数と完了タスク数を追加
+        project_progress['milestone_count'] = project_progress['project_id'].map(milestone_counts)
+        project_progress['completed_tasks'] = project_progress['project_id'].map(completed_counts)
+        project_progress['total_tasks'] = project_progress['task_id']
+        
+        # 開始日と終了日の取得
+        start_dates = project_groups['task_start_date'].min()
+        end_dates = project_groups['task_finish_date'].max()
+        
+        project_progress['start_date'] = project_progress['project_id'].map(start_dates)
+        project_progress['end_date'] = project_progress['project_id'].map(end_dates)
         
         # 進捗率と期間の計算
         project_progress['progress'] = (project_progress['completed_tasks'] / 
@@ -557,6 +579,12 @@ def calculate_progress(df: pd.DataFrame) -> pd.DataFrame:
             'duration': [0]
         })
 
+
+async def async_calculate_progress(df):
+    """プロジェクト進捗の計算 - 非同期版"""
+    return await run_in_threadpool(calculate_progress, df)
+
+
 def get_status_color(progress: float, has_delay: bool) -> str:
     """
     進捗状況に応じた色を返す
@@ -578,8 +606,9 @@ def get_status_color(progress: float, has_delay: bool) -> str:
         return COLORS['status']['warning']
     return COLORS['status']['neutral']
 
+
 @cache_result(ttl_seconds=60)  # 1分キャッシュ
-def get_next_milestone(df: pd.DataFrame) -> pd.DataFrame:
+def get_next_milestone(df):
     """
     次のマイルストーンを取得
     
@@ -589,13 +618,19 @@ def get_next_milestone(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         次のマイルストーンのデータフレーム
     """
+    # 遅延インポート
+    global datetime
+    if datetime is None:
+        datetime = import_datetime()
+        
     current_date = datetime.datetime.now()
     return df[
         (df['task_milestone'] == '○') & 
         (df['task_finish_date'] > current_date)
     ].sort_values('task_finish_date')
 
-def next_milestone_format(next_milestones: pd.DataFrame, project_id: str) -> str:
+
+def next_milestone_format(next_milestones, project_id: str) -> str:
     """
     マイルストーン表示のフォーマット
     
@@ -606,6 +641,11 @@ def next_milestone_format(next_milestones: pd.DataFrame, project_id: str) -> str
     Returns:
         フォーマット済みのマイルストーン文字列
     """
+    # 遅延インポート
+    global datetime
+    if datetime is None:
+        datetime = import_datetime()
+        
     milestone = next_milestones[next_milestones['project_id'] == project_id]
     if len(milestone) == 0:
         return '-'
@@ -613,8 +653,9 @@ def next_milestone_format(next_milestones: pd.DataFrame, project_id: str) -> str
     days_until = (next_date - datetime.datetime.now()).days
     return f"{milestone.iloc[0]['task_name']} ({days_until}日後)"
 
+
 @cache_result(ttl_seconds=30)  # 30秒キャッシュ
-def get_recent_tasks(df: pd.DataFrame, project_id: str) -> Dict[str, Any]:
+def get_recent_tasks(df, project_id: str) -> Dict[str, Any]:
     """
     プロジェクトの直近のタスク情報を取得する - 最適化版
     
@@ -625,6 +666,11 @@ def get_recent_tasks(df: pd.DataFrame, project_id: str) -> Dict[str, Any]:
     Returns:
         直近のタスク情報を含む辞書
     """
+    # 遅延インポート
+    global datetime
+    if datetime is None:
+        datetime = import_datetime()
+        
     try:
         current_date = datetime.datetime.now()
         
@@ -709,8 +755,14 @@ def get_recent_tasks(df: pd.DataFrame, project_id: str) -> Dict[str, Any]:
             'next_next_task': None
         }
 
+
+async def async_get_recent_tasks(df, project_id: str) -> Dict[str, Any]:
+    """プロジェクトの直近タスク情報取得 - 非同期版"""
+    return await run_in_threadpool(get_recent_tasks, df, project_id)
+
+
 # キャッシュをクリアする関数
-def clear_cache():
+def clear_cache() -> int:
     """メモリキャッシュをクリアする"""
     global _data_cache
     cache_size = len(_data_cache)
@@ -718,8 +770,9 @@ def clear_cache():
     logger.info(f"キャッシュをクリア: {cache_size}項目を削除しました")
     return cache_size
 
+
 # キャッシュ統計情報を取得
-def get_cache_stats():
+def get_cache_stats() -> Dict[str, Any]:
     """キャッシュの統計情報を取得"""
     return {
         'items': len(_data_cache),

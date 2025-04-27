@@ -8,10 +8,17 @@ console.log('Preload script starting...');
 let ipcInitialized = false;
 let documentReady = false;
 
-// 開発モードかどうか
-const isDev = process.env.NODE_ENV === 'development' || 
-              process.defaultApp || 
-              /electron/.test(process.execPath);
+// 環境検出の結果をキャッシュ
+const IS_DEV_MODE = (() => {
+  try {
+    return process.env.NODE_ENV === 'development' || 
+           process.defaultApp || 
+           /electron/.test(process.execPath);
+  } catch (e) {
+    console.warn('開発モード検出エラー:', e);
+    return false; // エラー時は安全に開発モードではないと判断
+  }
+})();
 
 /**
  * Electron環境変数を安全に設定する関数 - DOM状態を考慮した実装
@@ -22,7 +29,7 @@ const setElectronReady = () => {
   window.currentApiPort = null;
   window.apiInitialized = false;
   
-  // DOM状態に応じたメタタグ追加の処理
+  // DOM状態に応じたメタタグ追加の処理 - 最適化版
   const safelyAddMetaTag = () => {
     if (document && document.head) {
       try {
@@ -52,22 +59,11 @@ const setElectronReady = () => {
     });
   } else {
     // すでにDOMが読み込まれている場合は直接実行を試みる
-    if (!safelyAddMetaTag()) {
-      // 失敗した場合は短い遅延後に再試行
-      setTimeout(() => {
-        safelyAddMetaTag();
-        try {
-          document.dispatchEvent(new Event('electron-ready'));
-        } catch (e) {
-          console.error('イベント発行エラー:', e);
-        }
-      }, 50);
-    } else {
-      try {
-        document.dispatchEvent(new Event('electron-ready'));
-      } catch (e) {
-        console.error('イベント発行エラー:', e);
-      }
+    safelyAddMetaTag();
+    try {
+      document.dispatchEvent(new Event('electron-ready'));
+    } catch (e) {
+      console.error('イベント発行エラー:', e);
     }
   }
   
@@ -114,10 +110,12 @@ const validChannels = [
   'app-initializing',
   'app-error',
   'build-progress',
-  'startup-progress'
+  'startup-progress',
+  'shortcut-refresh-data',
+  'shortcut-select-file'
 ];
 
-// メインプロセスとレンダラープロセス間の安全な通信を提供
+// メインプロセスとレンダラープロセス間の安全な通信を提供 - 最適化版
 contextBridge.exposeInMainWorld('electron', {
   // Electron識別フラグ - 明示的に追加
   isElectron: true,
@@ -164,7 +162,7 @@ contextBridge.exposeInMainWorld('electron', {
     }
   },
   
-  // API通信ブリッジ - 新規追加
+  // API通信ブリッジ
   api: {
     request: (method, path, params, data, options) => 
       ipcRenderer.invoke('api:request', method, path, params, data, options),
@@ -202,11 +200,29 @@ contextBridge.exposeInMainWorld('electron', {
         return () => {};
       }
     }
+  },
+  
+  // ショートカット
+  shortcuts: {
+    onRefreshData: (callback) => {
+      const subscription = () => callback();
+      ipcRenderer.on('shortcut-refresh-data', subscription);
+      return () => {
+        ipcRenderer.removeListener('shortcut-refresh-data', subscription);
+      };
+    },
+    onSelectFile: (callback) => {
+      const subscription = () => callback();
+      ipcRenderer.on('shortcut-select-file', subscription);
+      return () => {
+        ipcRenderer.removeListener('shortcut-select-file', subscription);
+      };
+    }
   }
 });
 
-// 開発モードでのみ - デベロッパーツールショートカット
-if (isDev) {
+// デバッグ機能を安定した環境検出に基づいて設定
+if (IS_DEV_MODE) {
   window.addEventListener('keydown', (e) => {
     // F12でデベロッパーツールを開く
     if (e.key === 'F12') {

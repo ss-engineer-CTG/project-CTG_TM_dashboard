@@ -1,13 +1,15 @@
 from fastapi import APIRouter, HTTPException, Query
-import datetime
+import logging
 
 from app.models.schemas import DashboardMetrics, ProjectSummary, ProgressDistribution, DurationDistribution
 from app.services.data_processing import (
-    load_and_process_data, calculate_progress, 
+    async_load_and_process_data, async_calculate_progress,
     get_delayed_projects_count
 )
+from app.services.async_loader import lazy_import
 
 router = APIRouter()
+logger = logging.getLogger("api.metrics")
 
 @router.get("/metrics", response_model=DashboardMetrics)
 async def get_metrics(file_path: str = Query(None)):
@@ -21,19 +23,25 @@ async def get_metrics(file_path: str = Query(None)):
         ダッシュボードメトリクス
     """
     try:
-        # データの読み込みと処理
-        df = load_and_process_data(file_path)
+        # datetime と pandas を遅延インポート
+        datetime = lazy_import("datetime")
         
-        # プロジェクト進捗の計算
-        progress_data = calculate_progress(df)
+        # データの読み込みと処理 - 非同期版
+        df = await async_load_and_process_data(file_path)
+        
+        # プロジェクト進捗の計算 - 非同期版
+        progress_data = await async_calculate_progress(df)
         
         # 統計の計算
         total_projects = len(progress_data)
         active_projects = len(progress_data[progress_data['progress'] < 100])
         delayed_projects = get_delayed_projects_count(df)
+        
+        # 当月のマイルストーンプロジェクト数を計算
+        current_month = datetime.datetime.now().month
         milestone_projects = len(df[
             (df['task_milestone'] == '○') & 
-            (df['task_finish_date'].dt.month == datetime.datetime.now().month)
+            (df['task_finish_date'].dt.month == current_month)
         ]['project_id'].unique())
         
         # 進捗分布
@@ -78,4 +86,5 @@ async def get_metrics(file_path: str = Query(None)):
         return metrics
         
     except Exception as e:
+        logger.error(f"メトリクス取得エラー: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"メトリクスの取得に失敗しました: {str(e)}")

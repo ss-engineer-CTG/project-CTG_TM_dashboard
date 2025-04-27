@@ -1,5 +1,5 @@
 """
-ファイル操作関連のユーティリティ関数
+ファイル操作関連のユーティリティ関数 - 最適化版
 - ファイルパスの検証
 - ファイル/フォルダを開く機能
 """
@@ -8,9 +8,11 @@ import os
 import platform
 import subprocess
 import logging
-import pandas as pd
 from pathlib import Path
 from typing import Optional, Dict, Any
+
+# 遅延インポート用のインポート
+from .async_loader import lazy_import
 
 # ロガー設定
 logger = logging.getLogger(__name__)
@@ -31,6 +33,9 @@ def validate_file_path(path: Optional[str], allow_directories: bool = True) -> O
         検証済みの正規化されたパス、または無効な場合はNone
     """
     try:
+        # 動的インポート
+        pd = lazy_import("pandas")
+        
         if not path or pd.isna(path):
             logger.warning("Empty or NaN path provided")
             return None
