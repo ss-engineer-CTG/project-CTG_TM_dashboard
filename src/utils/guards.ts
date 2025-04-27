@@ -22,7 +22,7 @@ export function isApiError(error: unknown): error is APIError {
  * Electron環境であることをアサートするアサーション関数
  * Electron環境でない場合は例外をスローする
  */
-export function assertElectron(): void {  // asserts isElectronEnvironment から void に修正
+export function assertElectron(): void {
   if (!isElectronEnvironment()) {
     throw new Error('この機能はElectron環境でのみ利用可能です');
   }

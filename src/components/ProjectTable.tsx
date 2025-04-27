@@ -1,7 +1,10 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, lazy } from 'react';
 import { ProjectTableProps } from '../types';
-import ProgressBar from './ProgressBar';
-import RecentTasksInfo from './RecentTasksInfo';
+import { LazyLoadWrapper } from './LazyLoadWrapper';
+
+// 遅延ロードするコンポーネント
+const ProgressBar = lazy(() => import('./ProgressBar'));
+const RecentTasksInfo = lazy(() => import('./RecentTasksInfo'));
 
 const ProjectTable: React.FC<ProjectTableProps> = ({ projects, isLoading, onOpenFile, filePath }) => {
   // ステータス色を取得
@@ -84,7 +87,9 @@ const ProjectTable: React.FC<ProjectTableProps> = ({ projects, isLoading, onOpen
                 <td className="min-w-[100px]">{project.process}</td>
                 <td className="min-w-[100px]">{project.line}</td>
                 <td className="min-w-[150px] text-center">
-                  <ProgressBar progress={project.progress} color={statusColor} />
+                  <LazyLoadWrapper>
+                    <ProgressBar progress={project.progress} color={statusColor} />
+                  </LazyLoadWrapper>
                 </td>
                 <td className={`min-w-[100px] ${statusClass}`}>{status}</td>
                 <td className="min-w-[200px]">-</td>
@@ -92,10 +97,12 @@ const ProjectTable: React.FC<ProjectTableProps> = ({ projects, isLoading, onOpen
                   {project.completed_tasks}/{project.total_tasks}
                 </td>
                 <td className="min-w-[300px] max-w-[400px]">
-                  <RecentTasksInfo 
-                    projectId={project.project_id} 
-                    filePath={filePath} 
-                  />
+                  <LazyLoadWrapper>
+                    <RecentTasksInfo 
+                      projectId={project.project_id} 
+                      filePath={filePath} 
+                    />
+                  </LazyLoadWrapper>
                 </td>
                 <td className="min-w-[200px] text-center whitespace-nowrap">
                   <div className="flex gap-2 justify-center">

@@ -1,11 +1,14 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, lazy, Suspense } from 'react';
 import { HashRouter as Router, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from 'react-query';
 import { ApiProvider } from './contexts/ApiContext';
 import { NotificationProvider } from './contexts/NotificationContext';
-import Notification from './components/Notification';
+import { LazyLoadWrapper } from './components/LazyLoadWrapper';
 import ErrorBoundary from './components/ErrorBoundary';
-import Dashboard from './pages/Dashboard';
+
+// 遅延ロードするコンポーネント
+const Notification = lazy(() => import('./components/Notification'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
 
 const App: React.FC = () => {
   const [queryClient] = React.useState(() => new QueryClient({
@@ -46,13 +49,18 @@ const App: React.FC = () => {
           <ApiProvider>
             <Router>
               <Routes>
-                <Route path="/" element={<Dashboard />} />
-                {/* 将来的に追加するページはここに追加 */}
+                <Route path="/" element={
+                  <LazyLoadWrapper>
+                    <Dashboard />
+                  </LazyLoadWrapper>
+                } />
               </Routes>
             </Router>
           </ApiProvider>
         </ErrorBoundary>
-        <Notification />
+        <LazyLoadWrapper>
+          <Notification />
+        </LazyLoadWrapper>
       </NotificationProvider>
     </QueryClientProvider>
   );

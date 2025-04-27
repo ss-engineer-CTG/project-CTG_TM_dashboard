@@ -1,15 +1,25 @@
-import React, { useState, useEffect, Suspense, useCallback, lazy } from 'react';
+import React, { useState, useEffect, lazy, useCallback } from 'react';
 import { useProjects } from '../hooks/useProjects';
-import Header from '../components/Header';
-import MetricsCards from '../components/MetricsCards';
-import ProjectTable from '../components/ProjectTable';
-import ErrorMessage from '../components/ErrorMessage';
 import { getDefaultPath } from '../services/api';
 import { useNotification } from '../contexts/NotificationContext';
 import { useApi } from '../contexts/ApiContext';
+import { LazyLoadWrapper } from '../components/LazyLoadWrapper';
 
 // 遅延ロードするコンポーネント
+const Header = lazy(() => import('../components/Header'));
+const MetricsCards = lazy(() => import('../components/MetricsCards'));
+const ProjectTable = lazy(() => import('../components/ProjectTable'));
+const ErrorMessage = lazy(() => import('../components/ErrorMessage'));
 const DashboardCharts = lazy(() => import('../components/DashboardCharts'));
+
+// 最小限のローディングコンポーネントは即時ロード
+const LoadingPlaceholder = () => (
+  <div className="animate-pulse space-y-4">
+    <div className="h-16 bg-surface rounded"></div>
+    <div className="h-24 bg-surface rounded"></div>
+    <div className="h-64 bg-surface rounded"></div>
+  </div>
+);
 
 // クライアントサイドかどうかをチェック
 const isClient = typeof window !== 'undefined';
@@ -29,8 +39,8 @@ const Dashboard: React.FC = () => {
     metrics, 
     isLoading, 
     error, 
-    refreshData, 
-    openFile 
+    refreshData,
+    openFile: handleOpenFile 
   } = useProjects(selectedFilePath);
 
   // 初回マウント時にデフォルトファイルパスを取得
@@ -54,70 +64,69 @@ const Dashboard: React.FC = () => {
       return null;
     };
     
-    // 初期化処理
+    // 並列初期化処理
     const initializeApp = async () => {
       try {
-        // ローカルストレージから前回のパスを読み込み
-        const storedPath = loadStoredPath();
+        // ローカルストレージと非同期操作を並列実行
+        const [storedPath, connectionResult] = await Promise.all([
+          // ローカルストレージから前回のパスをロード - 同期なのでPromiseでラップ
+          Promise.resolve(loadStoredPath()),
+          
+          // API接続が確立されていない場合の確認処理
+          (!apiStatus.connected && !apiStatus.loading) ? checkConnection() : Promise.resolve(apiStatus.connected)
+        ]);
+        
+        if (!isMounted) return;
+        
+        // ストレージからパスが見つかった場合はすぐに設定
         if (storedPath) {
           setSelectedFilePath(storedPath);
         }
         
-        // API接続が確立されていない場合は確認
-        if (!apiStatus.connected && !apiStatus.loading) {
-          // 中央管理された接続確認を実行
-          const isConnected = await checkConnection();
+        // 接続状態に応じたエラー処理
+        if (!connectionResult) {
+          console.log('バックエンドサーバーに接続できません');
           
-          if (!isMounted) return;
-          
-          if (!isConnected) {
-            console.log('バックエンドサーバーに接続できません');
-            // 初回接続失敗時のみエラーメッセージを設定
-            if (initError === null) {
-              setInitError({
-                message: 'バックエンドサーバーに接続できません。',
-                details: {
-                  reason: '別のアプリケーションがAPIポートを使用している可能性があります。',
-                  solution: 'アプリケーションを再起動するか、使用中のアプリケーションを終了してから再試行してください。'
-                }
-              });
-              
-              addNotification('バックエンドサーバーに接続できません。', 'error');
-            }
-          } else {
-            // 接続成功時はエラーをクリア
-            setInitError(null);
-          }
-        } else if (apiStatus.connected) {
-          // 接続済みの場合はエラーをクリア
-          setInitError(null);
-        }
-        
-        // APIが接続されていればデフォルトパスを取得
-        if (apiStatus.connected && !storedPath) {
-          try {
-            const response = await getDefaultPath();
-            if (response.success && response.path && isMounted) {
-              setSelectedFilePath(response.path);
-              
-              // パスを保存
-              if (isClient) {
-                try {
-                  localStorage.setItem('lastSelectedPath', response.path);
-                } catch (e) {
-                  console.log('LocalStorageへの保存エラー');
-                }
+          if (initError === null) {
+            setInitError({
+              message: 'バックエンドサーバーに接続できません。',
+              details: {
+                reason: '別のアプリケーションがAPIポートを使用している可能性があります。',
+                solution: 'アプリケーションを再起動するか、使用中のアプリケーションを終了してから再試行してください。'
               }
-              
-              addNotification('デフォルトファイルを読み込みました', 'success');
-            } else {
-              console.log('デフォルトファイルパスが取得できませんでした');
+            });
+            
+            addNotification('バックエンドサーバーに接続できません。', 'error');
+          }
+        } else {
+          // 接続成功時はエラーをクリア
+          setInitError(null);
+          
+          // ストレージからパスが見つからなかった場合のみAPIからデフォルトパスを取得
+          if (!storedPath && apiStatus.connected) {
+            try {
+              const response = await getDefaultPath();
+              if (response.success && response.path && isMounted) {
+                setSelectedFilePath(response.path);
+                
+                // パスを保存
+                if (isClient) {
+                  try {
+                    localStorage.setItem('lastSelectedPath', response.path);
+                  } catch (e) {
+                    console.log('LocalStorageへの保存エラー');
+                  }
+                }
+                
+                addNotification('デフォルトファイルを読み込みました', 'success');
+              } else {
+                console.log('デフォルトファイルパスが取得できませんでした');
+              }
+            } catch (e) {
+              console.log('デフォルトファイルパス取得エラー');
             }
-          } catch (e) {
-            console.log('デフォルトファイルパス取得エラー');
           }
         }
-        
       } catch (error: any) {
         console.error(`アプリケーション初期化エラー: ${error.message}`);
         
@@ -136,7 +145,7 @@ const Dashboard: React.FC = () => {
       }
     };
     
-    // 初期化実行
+    // 初期化実行 - 非同期で
     initializeApp();
     
     return () => {
@@ -184,7 +193,8 @@ const Dashboard: React.FC = () => {
     // Ctrl+O/Cmd+Oでファイル選択
     const removeSelectListener = window.electron.shortcuts.onSelectFile(async () => {
       try {
-        const response = await getDefaultPath();
+        const { selectFile } = await import('../services/api');
+        const response = await selectFile(selectedFilePath || undefined);
         if (response.success && response.path) {
           handleSelectFile(response.path);
           addNotification('ファイルを選択しました', 'success');
@@ -197,16 +207,18 @@ const Dashboard: React.FC = () => {
     return () => {
       if (removeSelectListener) removeSelectListener();
     };
-  }, [addNotification, handleSelectFile]);
+  }, [addNotification, handleSelectFile, selectedFilePath]);
 
   return (
     <main className="min-h-screen bg-background">
-      <Header 
-        updateTime={metrics?.last_updated || '更新情報がありません'} 
-        onRefresh={refreshData}
-        selectedFilePath={selectedFilePath}
-        onSelectFile={handleSelectFile}
-      />
+      <LazyLoadWrapper>
+        <Header 
+          updateTime={metrics?.last_updated || '更新情報がありません'} 
+          onRefresh={refreshData}
+          selectedFilePath={selectedFilePath}
+          onSelectFile={handleSelectFile}
+        />
+      </LazyLoadWrapper>
       
       <div className="max-w-7xl mx-auto px-4 py-6">
         {/* API接続エラー通知 */}
@@ -237,41 +249,49 @@ const Dashboard: React.FC = () => {
         
         {/* 初期化エラー表示 */}
         {!isInitializing && initError && (
-          <ErrorMessage 
-            message={initError.message} 
-            details={initError.details}
-            onRetry={handleApiStatusRetry}
-          />
+          <LazyLoadWrapper>
+            <ErrorMessage 
+              message={initError.message} 
+              details={initError.details}
+              onRetry={handleApiStatusRetry}
+            />
+          </LazyLoadWrapper>
         )}
         
         {/* データ取得エラー表示 */}
         {error && (
-          <ErrorMessage 
-            message={error.message} 
-            details={error.details} 
-            onRetry={refreshData}
-          />
+          <LazyLoadWrapper>
+            <ErrorMessage 
+              message={error.message} 
+              details={error.details} 
+              onRetry={refreshData}
+            />
+          </LazyLoadWrapper>
         )}
         
         {/* メトリクスカード表示 */}
         {metrics && metrics.summary && (
-          <MetricsCards 
-            summary={metrics.summary} 
-            isLoading={isLoading} 
-          />
+          <LazyLoadWrapper>
+            <MetricsCards 
+              summary={metrics.summary} 
+              isLoading={isLoading} 
+            />
+          </LazyLoadWrapper>
         )}
         
         {/* プロジェクト一覧表示 */}
-        <ProjectTable 
-          projects={projects || []} 
-          isLoading={isLoading}
-          onOpenFile={openFile}
-          filePath={selectedFilePath || undefined}
-        />
+        <LazyLoadWrapper>
+          <ProjectTable 
+            projects={projects || []} 
+            isLoading={isLoading}
+            onOpenFile={handleOpenFile}
+            filePath={selectedFilePath || undefined}
+          />
+        </LazyLoadWrapper>
         
         {/* チャート表示 - Suspenseによる遅延ロード */}
         {metrics && (
-          <Suspense fallback={
+          <LazyLoadWrapper fallback={
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="dashboard-card h-80 flex items-center justify-center">
                 <div className="animate-pulse text-text-secondary">グラフをロード中...</div>
@@ -285,7 +305,7 @@ const Dashboard: React.FC = () => {
               metrics={metrics}
               isLoading={isLoading}
             />
-          </Suspense>
+          </LazyLoadWrapper>
         )}
       </div>
     </main>

@@ -17,7 +17,7 @@ const config = {
   openDevTools: process.env.OPEN_DEVTOOLS === 'true' || isDev,
   apiPort: process.env.API_PORT || '8000',
   watchFiles: !app.isPackaged && (process.env.WATCH_FILES !== 'false'), // 本番環境では無効化
-  optimizationEnabled: process.env.OPTIMIZATION === 'true' || false,
+  optimizationEnabled: process.env.OPTIMIZATION === 'true' || true, // デフォルトで最適化を有効に変更
   useExternalBackend: process.env.EXTERNAL_BACKEND === 'true' || process.env.USE_EXTERNAL_BACKEND === 'true'
 };
 
@@ -206,7 +206,7 @@ const verifyApiConnection = async (port, maxRetries = 5) => {
   return false;
 };
 
-// FastAPIバックエンドを起動する関数
+// FastAPIバックエンドを起動する関数 - 最適化版
 async function startFastApi() {
   try {
     // 外部バックエンドの使用確認
@@ -243,7 +243,7 @@ async function startFastApi() {
     if (useExternalBackend) {
       console.log('外部バックエンドモードを使用: バックエンドの起動をスキップします');
       
-      // 接続確認
+      // 接続確認 - 先に確認して早期リターン
       const isConnected = await verifyApiConnection(selectedPort, 3);
       if (isConnected) {
         console.log(`既存のバックエンドサーバーに接続成功（ポート: ${selectedPort}）`);
@@ -264,7 +264,7 @@ async function startFastApi() {
     
     console.log(`バックエンドサーバー用にポート ${selectedPort} を選択しました`);
     
-    // ポート情報を一時ファイルに保存 - 変数の再宣言をなくし、上で宣言した変数を再利用
+    // ポート情報を一時ファイルに保存
     try {
       fs.writeFileSync(portFilePath, selectedPort.toString());
     } catch (err) {
@@ -330,7 +330,7 @@ async function startFastApi() {
     
     console.log(`バックエンドサーバーを起動します: ${pythonPath} ${scriptPath} ${selectedPort}`);
 
-    // FastAPIプロセスを起動 - ポート番号を引数として渡す
+    // FastAPIプロセスを起動 - 最適化モードを追加
     fastApiProcess = spawn(pythonPath, [scriptPath, selectedPort.toString()], {
       stdio: 'pipe',
       detached: false,
@@ -343,7 +343,7 @@ async function startFastApi() {
         PYTHONLEGACYWINDOWSSTDIO: "1",
         ELECTRON_PORT: selectedPort.toString(),
         PYTHONOPTIMIZE: "1",
-        FASTAPI_STARTUP_OPTIMIZE: "1",
+        FASTAPI_STARTUP_OPTIMIZE: "1", // 最適化モードを常に有効化
         STREAMLINED_LOGGING: "1",
         DEBUG: config.debug ? "1" : "0"
       }
@@ -365,22 +365,25 @@ async function startFastApi() {
         const output = data.toString();
         console.log(`バックエンドログ: ${output.trim()}`);
         
+        // 初期化完了のメッセージを検知したら、すぐに接続確立とみなす（最適化）
         if (output.includes('Application startup complete') || 
-            output.includes('Uvicorn running')) {
+            output.includes('Uvicorn running') ||
+            output.includes('API Server is running')) {
           clearTimeout(timeoutId);
           startupDetectionState.startupMessageDetected = true;
           global.apiBaseUrl = `http://127.0.0.1:${selectedPort}/api`;
           
-          // 接続確認を行う
+          // ウィンドウを早期表示するために、メッセージ検出時点でresolve
+          resolve(selectedPort);
+          
+          // バックグラウンドで接続確認を行う
           setTimeout(async () => {
             const isConnected = await verifyApiConnection(selectedPort);
             if (isConnected) {
               startupDetectionState.connectionVerified = true;
-              resolve(selectedPort);
-            } else {
-              resolve(selectedPort); // 接続確認は失敗したが、起動メッセージは確認できたので続行
+              console.log('バックエンド接続が確認されました');
             }
-          }, 1000);
+          }, 500);
         }
       });
       
@@ -619,7 +622,7 @@ function registerGlobalShortcuts() {
   }
 }
 
-// メインウィンドウを作成する関数
+// メインウィンドウを作成する関数 - 最適化版
 function createWindow() {
   // CSP設定をセットアップ
   setupContentSecurityPolicy();
@@ -737,14 +740,18 @@ const setupEnvironmentVariables = () => {
   // APIポート - 常に同じポートを使用
   process.env.API_PORT = config.apiPort;
   
+  // 最適化フラグを設定
+  process.env.OPTIMIZATION = config.optimizationEnabled ? 'true' : 'false';
+  
   // コンソールに明示的に出力
   console.log('環境変数設定:');
   console.log(`- APP_ROOT: ${process.env.APP_ROOT}`);
   console.log(`- BUILD_PATH: ${process.env.BUILD_PATH}`);
   console.log(`- API_PORT: ${process.env.API_PORT}`);
+  console.log(`- OPTIMIZATION: ${process.env.OPTIMIZATION}`);
 };
 
-// 起動シーケンス最適化
+// 起動シーケンス最適化 - 並列起動機能の強化
 const optimizedStartup = async () => {
   try {
     // 1. 環境変数設定
@@ -766,35 +773,45 @@ const optimizedStartup = async () => {
       throw new Error(`静的ファイルが見つかりません: ${staticPath}`);
     }
     
-    // 6. 並列処理: バックエンド起動とメインウィンドウ初期化を並行
+    // 6. 並列処理：バックエンド起動とメインウィンドウ初期化を並行 - 改良版
     updateStartupProgress('バックエンドサーバーを起動中...', 30);
     console.log('バックエンドサーバーを起動しています...');
-    const startupPromises = [
+    
+    // バックエンド起動とウィンドウ作成を並列実行
+    const [port] = await Promise.all([
+      // バックエンド起動
       startFastApi().catch(error => {
         console.error('バックエンド起動エラー:', error);
-        throw error;
+        // エラーの場合もnullを返して処理を継続
+        updateStartupProgress('バックエンドサーバー起動エラー - フロントエンドのみで続行', 40);
+        return null;
       }),
       
+      // メインウィンドウ準備 - 非同期処理
       new Promise(resolve => {
         updateStartupProgress('ウィンドウを準備中...', 50);
-        createWindow();
-        resolve();
+        setTimeout(() => {
+          createWindow();
+          resolve();
+        }, 0); // nextTickで実行
       })
-    ];
+    ]);
     
-    // 7. 並列処理の完了を待機
-    const [port] = await Promise.all(startupPromises);
-    console.log(`バックエンドサーバーが起動しました (ポート: ${port})`);
+    if (port) {
+      console.log(`バックエンドサーバーが起動しました (ポート: ${port})`);
+    } else {
+      console.warn('バックエンドサーバーの起動に失敗しましたが、フロントエンドの初期化を続行します');
+    }
     
-    // 8. 開発環境セットアップ（本番環境では無効）
+    // 7. 開発環境セットアップ（本番環境では無効）
     setupDevelopmentEnvironment();
     
-    // 9. グローバルショートカット登録
+    // 8. グローバルショートカット登録
     registerGlobalShortcuts();
     
-    // 10. 接続確立
+    // 9. 接続確立
     updateStartupProgress('接続を確立中...', 70);
-    if (mainWindow) {
+    if (mainWindow && port) {
       // APIポート情報を環境変数から一貫して取得
       mainWindow.webContents.send('api-connection-established', {
         port: port,
@@ -802,7 +819,7 @@ const optimizedStartup = async () => {
       });
     }
     
-    // 11. 起動完了
+    // 10. 起動完了
     updateStartupProgress('アプリケーションを起動中...', 90);
     
   } catch (error) {

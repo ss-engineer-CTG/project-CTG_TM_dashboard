@@ -29,7 +29,7 @@ const setElectronReady = () => {
   window.currentApiPort = null;
   window.apiInitialized = false;
   
-  // DOM状態に応じたメタタグ追加の処理
+  // DOM状態に応じたメタタグ追加の処理 - 最適化版
   const safelyAddMetaTag = () => {
     if (document && document.head) {
       try {
@@ -59,22 +59,11 @@ const setElectronReady = () => {
     });
   } else {
     // すでにDOMが読み込まれている場合は直接実行を試みる
-    if (!safelyAddMetaTag()) {
-      // 失敗した場合は短い遅延後に再試行
-      setTimeout(() => {
-        safelyAddMetaTag();
-        try {
-          document.dispatchEvent(new Event('electron-ready'));
-        } catch (e) {
-          console.error('イベント発行エラー:', e);
-        }
-      }, 50);
-    } else {
-      try {
-        document.dispatchEvent(new Event('electron-ready'));
-      } catch (e) {
-        console.error('イベント発行エラー:', e);
-      }
+    safelyAddMetaTag();
+    try {
+      document.dispatchEvent(new Event('electron-ready'));
+    } catch (e) {
+      console.error('イベント発行エラー:', e);
     }
   }
   
@@ -126,7 +115,7 @@ const validChannels = [
   'shortcut-select-file'
 ];
 
-// メインプロセスとレンダラープロセス間の安全な通信を提供
+// メインプロセスとレンダラープロセス間の安全な通信を提供 - 最適化版
 contextBridge.exposeInMainWorld('electron', {
   // Electron識別フラグ - 明示的に追加
   isElectron: true,

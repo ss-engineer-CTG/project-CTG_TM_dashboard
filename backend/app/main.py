@@ -10,9 +10,6 @@ from pathlib import Path
 import logging
 import time
 import asyncio
-import functools
-import concurrent.futures
-from contextlib import asynccontextmanager
 import importlib
 import traceback
 
@@ -35,35 +32,6 @@ def record_stage(stage_name):
 
 # 最初のステージを記録
 record_stage('initialization_start')
-
-# 早期モジュールインポート
-preloaded_modules = {}
-def preload_modules():
-    """主要モジュールの事前ロード（起動高速化）"""
-    global preloaded_modules
-    try:
-        # 主要モジュールを先にロード
-        modules_to_preload = [
-            'uvicorn', 'fastapi', 'pandas', 'numpy', 'concurrent.futures',
-            'app.routers.projects', 'app.routers.metrics', 'app.routers.files', 'app.routers.health',
-            'app.services.data_processing', 'app.services.file_utils'
-        ]
-        
-        for module_name in modules_to_preload:
-            try:
-                start_time = time.time()
-                preloaded_modules[module_name] = importlib.import_module(module_name)
-                load_time = time.time() - start_time
-                if load_time > 0.1:  # 100ms以上かかったモジュールだけ記録
-                    record_stage(f'preload_{module_name}')
-            except ImportError as e:
-                print(f"モジュール {module_name} のプリロードに失敗: {e}")
-        
-        record_stage('modules_preloaded')
-        return True
-    except Exception as e:
-        print(f"モジュールプリロード総合エラー: {e}")
-        return False
 
 # 最適化環境変数を確認
 is_optimized = os.environ.get('FASTAPI_STARTUP_OPTIMIZE') == '1'
@@ -92,14 +60,43 @@ logger.info(f"Python バージョン: {sys.version}")
 logger.info(f"実行パス: {sys.executable}")
 logger.info(f"作業ディレクトリ: {os.getcwd()}")
 
-# モジュールを先にプリロード
+# 早期モジュールインポート
+preloaded_modules = {}
+def preload_modules():
+    """主要モジュールの事前ロード（起動高速化）"""
+    global preloaded_modules
+    try:
+        # 主要モジュールを先にロード
+        modules_to_preload = [
+            'uvicorn', 'fastapi',
+            'app.routers.health',
+            'app.services.async_loader'
+        ]
+        
+        for module_name in modules_to_preload:
+            try:
+                start_time = time.time()
+                preloaded_modules[module_name] = importlib.import_module(module_name)
+                load_time = time.time() - start_time
+                if load_time > 0.1:  # 100ms以上かかったモジュールだけ記録
+                    record_stage(f'preload_{module_name}')
+            except ImportError as e:
+                print(f"モジュール {module_name} のプリロードに失敗: {e}")
+        
+        record_stage('modules_preloaded')
+        return True
+    except Exception as e:
+        print(f"モジュールプリロード総合エラー: {e}")
+        return False
+
+# 最適化環境変数をチェックしてモジュールをプリロード
 if is_optimized:
     preload_modules()
 
-# より強力なポート確認と割り当てロジック（並列処理）
+# より強力なポート確認と割り当てロジック
 def find_best_available_port(preferred_ports=[8000, 8080, 8888, 8081, 8001, 3001, 5000], timeout=1.0):
     """
-    並列処理によるポート検出の高速化
+    ポート検出の高速化
     
     Args:
         preferred_ports: 優先度順のポートリスト
@@ -109,8 +106,6 @@ def find_best_available_port(preferred_ports=[8000, 8080, 8888, 8081, 8001, 3001
         使用可能なポート番号、見つからなければNone
     """
     import socket
-    import concurrent.futures
-    from contextlib import closing
     
     # 特別な環境変数があればそのポートを最優先
     env_port = os.environ.get('ELECTRON_PORT')
@@ -127,28 +122,19 @@ def find_best_available_port(preferred_ports=[8000, 8080, 8888, 8081, 8001, 3001
     
     record_stage('port_detection_start')
     
-    # 並列にポートをチェック
-    def check_port(port):
+    # 高速ポート検出 - 最適化バージョン
+    for port in preferred_ports:
         try:
-            with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 sock.settimeout(timeout)
                 result = sock.connect_ex(('127.0.0.1', port))
-                return port, result != 0  # 0でなければ使用可能
+                if result != 0:  # 0でなければ使用可能
+                    logger.info(f"使用可能なポート {port} を検出")
+                    return port
         except Exception as e:
             logger.error(f"ポート {port} の確認中にエラー: {e}")
-            return port, False
-    
-    # ThreadPoolExecutorで並列処理
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(preferred_ports)) as executor:
-        results = list(executor.map(check_port, preferred_ports))
     
     record_stage('port_detection_complete')
-    
-    # 使用可能なポートを検索
-    for port, available in results:
-        if available:
-            logger.info(f"使用可能なポート {port} を検出")
-            return port
     
     # どのポートも使用できない場合はランダムな高ポート
     import random
@@ -162,15 +148,9 @@ async def run_background_tasks():
     await asyncio.sleep(1)  # メインの起動を優先
     
     try:
-        # ここに重い初期化処理を移動
-        logger.debug("バックグラウンドタスク実行中...")
-        
-        # 環境情報のログを後回し
-        logger.debug(f"カレントディレクトリ: {os.getcwd()}")
-        logger.debug(f"Python実行パス: {sys.executable}")
-        logger.debug(f"Python バージョン: {sys.version}")
-        logger.debug(f"環境変数 PMSUITE_DASHBOARD_FILE: {os.environ.get('PMSUITE_DASHBOARD_FILE', '未設定')}")
-        logger.debug(f"環境変数 APP_PATH: {os.environ.get('APP_PATH', '未設定')}")
+        # AsyncLoaderの初期化処理を実行
+        from app.services.async_loader import initialize_background_tasks
+        await initialize_background_tasks()
         
         # データディレクトリのチェック
         data_dir = Path(os.getcwd()) / "data" / "exports"
@@ -186,22 +166,6 @@ async def run_background_tasks():
         except Exception:
             pass
             
-        # 必要なパッケージのインポート確認
-        try:
-            import pandas
-            import numpy
-            logger.debug("必須パッケージ: pandas, numpy は利用可能です")
-        except ImportError as e:
-            logger.error(f"必須パッケージの不足を検出しました: {e}")
-            logger.error("以下のパッケージをインストールしてください: pandas, numpy")
-            
-        # tkinterの利用可能性をチェック - 非クリティカル
-        try:
-            import tkinter
-            logger.debug("tkinterは利用可能です")
-        except ImportError:
-            logger.warning("tkinterが利用できません。ファイル選択ダイアログが表示されない可能性があります。")
-        
         # パフォーマンス統計を出力
         logger.debug("バックグラウンドタスク完了")
         logger.debug("=== パフォーマンス統計 ===")
@@ -212,102 +176,32 @@ async def run_background_tasks():
         logger.error(f"バックグラウンドタスクエラー: {str(e)}")
         logger.error(traceback.format_exc())
 
-# インメモリキャッシュ
-_data_cache = {}
-
-def cache_result(ttl_seconds: int = 300):
-    """関数の結果をキャッシュするデコレータ"""
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            # キャッシュキー作成
-            key_parts = [func.__name__]
-            for arg in args:
-                if isinstance(arg, (str, int, float, bool)):
-                    key_parts.append(str(arg))
-            
-            # 重要な引数のみキャッシュキーに含める
-            file_path = kwargs.get('dashboard_file_path')
-            if file_path:
-                key_parts.append(str(file_path))
-                
-            cache_key = ":".join(key_parts)
-            
-            # キャッシュチェック
-            if cache_key in _data_cache:
-                data, timestamp = _data_cache[cache_key]
-                age = time.time() - timestamp
-                if age < ttl_seconds:
-                    logger.debug(f"キャッシュヒット: {cache_key} (経過時間: {age:.1f}秒)")
-                    return data
-            
-            # キャッシュミス時は関数実行
-            result = func(*args, **kwargs)
-            _data_cache[cache_key] = (result, time.time())
-            return result
-        return wrapper
-    return decorator
-
-# メモリ最適化: 消費メモリを予測し必要に応じて解放
-async def monitor_memory_usage():
-    """メモリ使用量をモニタリング"""
-    await asyncio.sleep(30)  # 起動から30秒後に確認
-    
-    try:
-        import psutil
-        import gc
-        
-        process = psutil.Process(os.getpid())
-        memory_info = process.memory_info()
-        memory_mb = memory_info.rss / (1024 * 1024)
-        
-        logger.debug(f"メモリ使用量: {memory_mb:.1f}MB")
-        
-        # 閾値を超えたらガベージコレクションを強制実行
-        if memory_mb > 200:  # 200MB以上使用している場合
-            logger.info(f"高メモリ使用量を検出: {memory_mb:.1f}MB - GCを実行")
-            gc.collect()
-    except Exception as e:
-        logger.warning(f"メモリモニタリングエラー: {e}")
-
-# 依存関係をチェックして結果をログに出力
-def check_dependencies():
-    """必要な依存関係をチェックしてレポートする"""
-    dependencies = {
-        'pandas': False,
-        'numpy': False,
-        'fastapi': False, 
-        'uvicorn': False
-    }
-    
-    for package in dependencies.keys():
-        try:
-            importlib.import_module(package)
-            dependencies[package] = True
-        except ImportError:
-            pass
-    
-    # 結果をログに出力
-    missing = [pkg for pkg, installed in dependencies.items() if not installed]
-    if missing:
-        logger.error(f"必須パッケージがインストールされていません: {', '.join(missing)}")
-        logger.error("以下のコマンドを実行してインストールしてください:")
-        logger.error("pip install " + " ".join(missing))
-    else:
-        logger.info("すべての必須パッケージが正常にインストールされています")
-    
-    return not missing
-
 # ライフスパンイベントマネージャ
-@asynccontextmanager
 async def lifespan(app: FastAPI):
     """アプリケーションのライフスパンイベントを管理する"""
     record_stage('lifespan_start')
     
-    # 依存関係チェック
-    deps_ok = check_dependencies()
-    if not deps_ok:
-        logger.warning("依存関係に問題があります。アプリケーションが正常に動作しない可能性があります。")
+    # 全てのルーターを明示的に登録
+    logger.info("ルーターを登録しています...")
+    try:
+        # health ルーター
+        if 'app.routers.health' in preloaded_modules:
+            app.include_router(preloaded_modules['app.routers.health'].router, prefix="/api", tags=["health"])
+        else:
+            from app.routers import health
+            app.include_router(health.router, prefix="/api", tags=["health"])
+        
+        # 残りのルーターを直接登録
+        from app.routers import projects, metrics, files
+        
+        app.include_router(projects.router, prefix="/api", tags=["projects"])
+        app.include_router(metrics.router, prefix="/api", tags=["metrics"])
+        app.include_router(files.router, prefix="/api", tags=["files"])
+        
+        logger.info("全てのルーターが正常に登録されました")
+    except ImportError as e:
+        logger.error(f"ルーターのインポートに失敗しました: {e}")
+        logger.error(traceback.format_exc())
     
     # 起動時の処理
     logger.info("=== APIサーバーを起動しました ===")
@@ -319,9 +213,6 @@ async def lifespan(app: FastAPI):
     
     # 非同期でバックグラウンドタスクを実行
     background_task = asyncio.create_task(run_background_tasks())
-    
-    # メモリモニタリングも開始
-    memory_monitor = asyncio.create_task(monitor_memory_usage())
     
     # ポート情報を一時ファイルに保存
     try:
@@ -341,9 +232,8 @@ async def lifespan(app: FastAPI):
     logger.info("APIサーバーを終了します")
     
     # バックグラウンドタスクが完了してない場合はキャンセル
-    for task in [background_task, memory_monitor]:
-        if not task.done():
-            task.cancel()
+    if not background_task.done():
+        background_task.cancel()
     
     # ポート情報ファイルの削除を試みる
     try:
@@ -414,24 +304,6 @@ def create_app(port=8000):
             
             return response
     
-    # ルーターの登録 - モジュールがプリロードされていれば使用
-    if 'app.routers.projects' in preloaded_modules:
-        app.include_router(preloaded_modules['app.routers.projects'].router, prefix="/api", tags=["projects"])
-        app.include_router(preloaded_modules['app.routers.metrics'].router, prefix="/api", tags=["metrics"])
-        app.include_router(preloaded_modules['app.routers.files'].router, prefix="/api", tags=["files"])
-        app.include_router(preloaded_modules['app.routers.health'].router, prefix="/api", tags=["health"])
-    else:
-        # モジュール動的インポート
-        try:
-            from app.routers import projects, metrics, files, health
-            app.include_router(projects.router, prefix="/api", tags=["projects"])
-            app.include_router(metrics.router, prefix="/api", tags=["metrics"])
-            app.include_router(files.router, prefix="/api", tags=["files"])
-            app.include_router(health.router, prefix="/api", tags=["health"])
-        except ImportError as e:
-            logger.error(f"ルーターのインポートに失敗しました: {e}")
-            logger.error("アプリケーションが正常に機能しない可能性があります。")
-    
     # デスクトップアプリケーションからの終了シグナルを処理するためのシャットダウンエンドポイント
     @app.post("/api/shutdown")
     async def shutdown():
@@ -455,27 +327,37 @@ def create_app(port=8000):
             
         try:
             import platform
-            import psutil
-            
-            # システム情報
-            system_info = {
-                "platform": platform.platform(),
-                "python_version": sys.version,
-                "python_path": sys.executable,
-                "cwd": os.getcwd(),
-                "app_dir": str(Path(__file__).parent),
-            }
-            
-            # プロセス情報
-            process = psutil.Process()
-            proc_info = {
-                "pid": process.pid,
-                "memory_usage_mb": process.memory_info().rss / (1024 * 1024),
-                "cpu_percent": process.cpu_percent(interval=0.1),
-                "threads": len(process.threads()),
-                "create_time": process.create_time(),
-                "uptime_sec": time.time() - process.create_time(),
-            }
+            try:
+                import psutil
+                
+                # システム情報
+                system_info = {
+                    "platform": platform.platform(),
+                    "python_version": sys.version,
+                    "python_path": sys.executable,
+                    "cwd": os.getcwd(),
+                    "app_dir": str(Path(__file__).parent),
+                }
+                
+                # プロセス情報
+                process = psutil.Process()
+                proc_info = {
+                    "pid": process.pid,
+                    "memory_usage_mb": process.memory_info().rss / (1024 * 1024),
+                    "cpu_percent": process.cpu_percent(interval=0.1),
+                    "threads": len(process.threads()),
+                    "create_time": process.create_time(),
+                    "uptime_sec": time.time() - process.create_time(),
+                }
+            except ImportError:
+                system_info = {
+                    "platform": platform.platform(),
+                    "python_version": sys.version,
+                    "python_path": sys.executable,
+                    "cwd": os.getcwd(),
+                    "app_dir": str(Path(__file__).parent),
+                }
+                proc_info = {"note": "psutil module not available"}
             
             # 環境変数
             env_vars = {
@@ -493,10 +375,8 @@ def create_app(port=8000):
             }
             
             # キャッシュ情報
-            cache_info = {
-                "cache_entries": len(_data_cache),
-                "cache_keys": list(_data_cache.keys()),
-            }
+            from app.services.data_processing import get_cache_stats
+            cache_info = get_cache_stats()
             
             return {
                 "system": system_info,

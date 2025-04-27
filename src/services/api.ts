@@ -42,7 +42,7 @@ class ApiError extends Error implements APIError {
 }
 
 /**
- * APIが初期化されていることを確認する高階関数
+ * APIが初期化されていることを確認する高階関数 - 最適化版
  */
 const withApiInitialized = async <T>(
   fn: () => Promise<T>, 
@@ -406,25 +406,32 @@ export const getMetrics = async (filePath?: string): Promise<DashboardMetrics> =
 export const getDefaultPath = async (): Promise<FileResponse> => {
   return withApiInitialized(async () => {
     try {
+      let storedPath = null;
+      
       // ローカルストレージから前回のパスをチェック
       if (isClient) {
         try {
-          const lastPath = localStorage.getItem('lastSelectedPath');
-          if (lastPath) {
-            return {
-              success: true,
-              message: '前回のファイルパスを使用します',
-              path: lastPath
-            };
-          }
+          storedPath = localStorage.getItem('lastSelectedPath');
         } catch (e) {
           // ローカルストレージエラーは無視
         }
       }
       
       // APIから取得
-      const data = await apiClient.get<FileResponse>('/files/default-path', undefined, { timeout: 5000 });
-      return data;
+      const apiResponse = await apiClient.get<FileResponse>('/files/default-path', undefined, { timeout: 5000 });
+      
+      // 保存されたパスがある場合はそれを優先
+      if (storedPath) {
+        return {
+          success: true,
+          message: '前回のファイルパスを使用します',
+          path: storedPath
+        };
+      }
+      
+      // APIからの応答を返す
+      return apiResponse;
+      
     } catch (error: any) {
       // エラーが発生してもFileResponse形式で返す
       return {

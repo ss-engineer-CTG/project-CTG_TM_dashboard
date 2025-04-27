@@ -1,12 +1,16 @@
 import React, { memo, useState, useEffect } from 'react';
 import { DashboardChartsProps } from '../types';
-import ProgressChart from './ProgressChart';
-import DurationChart from './DurationChart';
+import { LazyLoadWrapper } from './LazyLoadWrapper';
+import { lazy } from 'react';
 
 // パフォーマンス計測
 if (typeof window !== 'undefined') {
   window.performance.mark('dashboard_charts_init');
 }
+
+// 遅延ロードするチャートコンポーネント
+const ProgressChart = lazy(() => import('./ProgressChart'));
+const DurationChart = lazy(() => import('./DurationChart'));
 
 const DashboardCharts: React.FC<DashboardChartsProps> = memo(({ metrics, isLoading }) => {
   // リソース読み込み状態を表す内部状態
@@ -65,10 +69,12 @@ const DashboardCharts: React.FC<DashboardChartsProps> = memo(({ metrics, isLoadi
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       {hasValidProgressData ? (
-        <ProgressChart 
-          data={metrics.progress_distribution} 
-          isLoading={false} 
-        />
+        <LazyLoadWrapper>
+          <ProgressChart 
+            data={metrics.progress_distribution} 
+            isLoading={false} 
+          />
+        </LazyLoadWrapper>
       ) : (
         <div className="dashboard-card h-80 flex items-center justify-center">
           <div className="text-text-secondary">進捗データがありません</div>
@@ -76,10 +82,12 @@ const DashboardCharts: React.FC<DashboardChartsProps> = memo(({ metrics, isLoadi
       )}
       
       {hasValidDurationData ? (
-        <DurationChart 
-          data={metrics.duration_distribution} 
-          isLoading={false} 
-        />
+        <LazyLoadWrapper>
+          <DurationChart 
+            data={metrics.duration_distribution} 
+            isLoading={false} 
+          />
+        </LazyLoadWrapper>
       ) : (
         <div className="dashboard-card h-80 flex items-center justify-center">
           <div className="text-text-secondary">期間データがありません</div>

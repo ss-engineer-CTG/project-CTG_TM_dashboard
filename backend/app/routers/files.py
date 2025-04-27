@@ -10,6 +10,7 @@ import shutil
 
 from app.models.schemas import FilePath, FileResponse
 from app.services.file_utils import validate_file_path, open_file_or_folder
+from app.services.data_processing import resolve_dashboard_path
 
 router = APIRouter()
 logger = logging.getLogger("api.files")
@@ -44,9 +45,7 @@ async def get_default_path():
         デフォルトパス
     """
     try:
-        # デフォルトパスの解決ロジック
-        from app.services.data_processing import resolve_dashboard_path
-        
+        # デフォルトパスの解決ロジック - 最適化版
         path = resolve_dashboard_path()
         if os.path.exists(path):
             return FileResponse(
@@ -74,16 +73,12 @@ async def select_file(initial_path: str = None):
     Returns:
         選択されたファイルパス
     """
-    # ログ強化
-    logger.info(f"ファイル選択ダイアログの表示リクエストを受信: initial_path={initial_path}")
-    
     # 環境変数でtkinterのダイアログをスキップする設定
     use_electron = os.environ.get("USE_ELECTRON_DIALOG", "false").lower() == "true"
     
     if use_electron:
         # Electron環境を検出した場合、デフォルトパスのみ返す（Electron側でダイアログを表示する）
         logger.info("Electron環境検出: デフォルトパスのみ返します")
-        from app.services.data_processing import resolve_dashboard_path
         default_path = resolve_dashboard_path()
         
         return FileResponse(
@@ -95,40 +90,29 @@ async def select_file(initial_path: str = None):
     try:
         # tkinterのインポート試行
         try:
-            logger.info("tkinterモジュールをインポート試行")
             import tkinter as tk
             from tkinter import filedialog
             
-            # システム情報のログ出力
-            logger.info(f"実行環境: Python {sys.version}, {platform.system()} {platform.release()}")
-            
             # tkinterウィンドウを作成し、非表示にする
-            logger.info("tkinterウィンドウを作成")
             root = tk.Tk()
             root.withdraw()
             
             # 初期ディレクトリの設定
             if initial_path and os.path.isdir(initial_path):
                 initialdir = initial_path
-                logger.info(f"初期ディレクトリ(ディレクトリ指定): {initialdir}")
             elif initial_path and os.path.isfile(initial_path):
                 initialdir = str(Path(initial_path).parent)
-                logger.info(f"初期ディレクトリ(ファイル指定の親): {initialdir}")
             else:
                 initialdir = os.getcwd()
-                logger.info(f"初期ディレクトリ(カレントディレクトリ): {initialdir}")
             
             # ファイル選択ダイアログを表示
-            logger.info("ファイル選択ダイアログを表示...")
             file_path = filedialog.askopenfilename(
                 initialdir=initialdir,
                 title="ダッシュボードCSVファイルの選択",
                 filetypes=(("CSV files", "*.csv"), ("All files", "*.*"))
             )
-            logger.info("ファイル選択ダイアログが閉じられました")
             
             # tkinterウィンドウを破棄
-            logger.info("tkinterウィンドウを破棄")
             root.destroy()
             
             # ファイルが選択されなかった場合
@@ -149,12 +133,10 @@ async def select_file(initial_path: str = None):
             )
             
         except ImportError as ie:
-            # tkinterが使用できない場合のログ強化
+            # tkinterが使用できない場合のログ
             logger.error(f"tkinterのインポートエラー: {str(ie)}")
-            logger.info("デフォルトパスを使用するフォールバックに切り替え")
             
             # tkinterが使用できない場合はデフォルトパスを使用
-            from app.services.data_processing import resolve_dashboard_path
             default_path = resolve_dashboard_path()
             
             logger.info(f"デフォルトパスを使用: {default_path}")
@@ -169,8 +151,6 @@ async def select_file(initial_path: str = None):
             logger.error(f"tkinterの使用中に例外が発生: {str(e)}", exc_info=True)
             
             # 例外が発生した場合でもデフォルトパスで回復を試みる
-            logger.info("例外発生のためデフォルトパスによる回復を試みます")
-            from app.services.data_processing import resolve_dashboard_path
             default_path = resolve_dashboard_path()
             
             return FileResponse(
