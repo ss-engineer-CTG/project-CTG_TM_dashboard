@@ -10,7 +10,8 @@ const Header = lazy(() => import('../components/Header'));
 const MetricsCards = lazy(() => import('../components/MetricsCards'));
 const ProjectTable = lazy(() => import('../components/ProjectTable'));
 const ErrorMessage = lazy(() => import('../components/ErrorMessage'));
-const DashboardCharts = lazy(() => import('../components/DashboardCharts'));
+
+// DashboardChartsのインポートを削除
 
 // 最小限のローディングコンポーネントは即時ロード
 const LoadingPlaceholder = () => (
@@ -289,24 +290,7 @@ const Dashboard: React.FC = () => {
           />
         </LazyLoadWrapper>
         
-        {/* チャート表示 - Suspenseによる遅延ロード */}
-        {metrics && (
-          <LazyLoadWrapper fallback={
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="dashboard-card h-80 flex items-center justify-center">
-                <div className="animate-pulse text-text-secondary">グラフをロード中...</div>
-              </div>
-              <div className="dashboard-card h-80 flex items-center justify-center">
-                <div className="animate-pulse text-text-secondary">グラフをロード中...</div>
-              </div>
-            </div>
-          }>
-            <DashboardCharts
-              metrics={metrics}
-              isLoading={isLoading}
-            />
-          </LazyLoadWrapper>
-        )}
+        {/* チャート表示部分を削除 */}
       </div>
     </main>
   );

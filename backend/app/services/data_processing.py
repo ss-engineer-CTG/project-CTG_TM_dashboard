@@ -61,8 +61,8 @@ async def initialize_data_processing():
     # 必要なモジュールをバックグラウンドでインポート
     pd = import_pandas()
     datetime = import_datetime()
-    concurrent_module = lazy_import("concurrent.futures")
-    concurrent = concurrent_module.futures
+    # エラーの修正: concurrent.futures は単独のモジュール
+    concurrent = lazy_import("concurrent.futures")
     
     # デフォルトパスを非同期で解決
     _default_dashboard_path = await run_in_threadpool(resolve_dashboard_path)
@@ -70,7 +70,6 @@ async def initialize_data_processing():
     logger.info("データ処理モジュールの初期化が完了しました")
     
     return True
-
 
 def cache_result(ttl_seconds: int = 300, max_entries: int = _MAX_CACHE_ENTRIES):
     """関数の結果をキャッシュするデコレータ - 最適化版"""

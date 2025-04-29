@@ -33,20 +33,8 @@ export interface ProjectSummary {
   milestone_projects: number;
 }
 
-export interface ProgressDistribution {
-  ranges: string[];
-  counts: number[];
-}
-
-export interface DurationDistribution {
-  ranges: string[];
-  counts: number[];
-}
-
 export interface DashboardMetrics {
   summary: ProjectSummary;
-  progress_distribution: ProgressDistribution;
-  duration_distribution: DurationDistribution;
   last_updated: string;
 }
 

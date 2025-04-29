@@ -36,21 +36,11 @@ class ProjectSummary(BaseModel):
     delayed_projects: int
     milestone_projects: int
 
-
-class ProgressDistribution(BaseModel):
-    ranges: List[str]
-    counts: List[int]
-
-
-class DurationDistribution(BaseModel):
-    ranges: List[str]
-    counts: List[int]
-
-
 class DashboardMetrics(BaseModel):
     summary: ProjectSummary
-    progress_distribution: ProgressDistribution
-    duration_distribution: DurationDistribution
+    # チャート関連フィールドを削除
+    # progress_distribution: ProgressDistribution
+    # duration_distribution: DurationDistribution
     last_updated: str
 
 

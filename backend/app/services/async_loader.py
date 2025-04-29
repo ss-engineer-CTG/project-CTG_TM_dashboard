@@ -1,6 +1,7 @@
 """
-非同期ローダーモジュール
+非同期ローダーモジュール - 改善版
 - バックエンド起動時の重い処理を遅延/非同期で実行するためのユーティリティ
+- システム健全性モジュールと統合して初期化進捗を追跡
 """
 
 import asyncio
@@ -9,6 +10,7 @@ import importlib
 import logging
 import sys
 import time
+import traceback
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 # ロガー設定
@@ -23,6 +25,14 @@ _import_cache: Dict[str, Any] = {}
 _initialization_complete = False
 _initialization_tasks = []
 
+# 健全性モジュールのインポート
+try:
+    from app.services.system_health import register_component_ready, set_component_error
+    system_health_available = True
+except ImportError:
+    system_health_available = False
+    logger.warning("システム健全性モジュールが使用できません - パフォーマンス監視が制限されます")
+
 async def initialize_background_tasks():
     """バックグラウンドタスクを初期化"""
     global _initialization_complete
@@ -31,21 +41,69 @@ async def initialize_background_tasks():
         logger.debug("初期化は既に完了しています")
         return
     
+    start_time = time.time()
+    
+    # サーバーコンポーネントの登録
+    if system_health_available:
+        register_component_ready("server", {
+            "startup_time": time.time() - start_time
+        })
+    
     # すべての初期化タスクを並列実行
     if _initialization_tasks:
         logger.info(f"{len(_initialization_tasks)}個の初期化タスクを開始します")
-        start_time = time.time()
-        await asyncio.gather(*_initialization_tasks)
-        logger.info(f"すべての初期化タスクが完了しました ({time.time() - start_time:.2f}秒)")
+        
+        try:
+            # 並列実行で高速化
+            results = await asyncio.gather(*_initialization_tasks, return_exceptions=True)
+            
+            # エラーチェック
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.error(f"初期化タスク {i+1} が失敗しました: {result}")
+                    if system_health_available:
+                        set_component_error(f"init_task_{i+1}", str(result))
+            
+            logger.info(f"すべての初期化タスクが完了しました ({time.time() - start_time:.2f}秒)")
+        except Exception as e:
+            logger.error(f"初期化タスクの実行中にエラーが発生しました: {str(e)}")
+            logger.error(traceback.format_exc())
+            if system_health_available:
+                set_component_error("async_initialization", str(e))
+            return
     
+    # 完了状態に設定
     _initialization_complete = True
+    
+    # 非同期ローダーコンポーネントの準備完了を登録
+    if system_health_available:
+        register_component_ready("async_loader", {
+            "tasks_count": len(_initialization_tasks),
+            "completion_time": time.time() - start_time
+        })
 
 
 def register_init_task(coro_func):
     """初期化タスクとして関数を登録するデコレータ"""
     @functools.wraps(coro_func)
     async def wrapper(*args, **kwargs):
-        return await coro_func(*args, **kwargs)
+        try:
+            # 開始時間を記録
+            start_time = time.time()
+            # 関数を実行
+            result = await coro_func(*args, **kwargs)
+            # 完了時間を記録
+            completion_time = time.time() - start_time
+            
+            # 実行時間が長い場合はログに記録
+            if completion_time > 0.5:
+                logger.info(f"初期化タスク '{coro_func.__name__}' が完了しました ({completion_time:.2f}秒)")
+            
+            return result
+        except Exception as e:
+            logger.error(f"初期化タスク '{coro_func.__name__}' でエラーが発生しました: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise
     
     _initialization_tasks.append(wrapper())
     return wrapper
@@ -72,11 +130,23 @@ def lazy_import(module_name: str):
         # 重いモジュールはログに記録
         if import_time > 0.1:  # 100ms以上かかったモジュールを記録
             logger.info(f"モジュール {module_name} を遅延インポート ({import_time:.2f}秒)")
+            
+            # システム健全性モジュールがある場合はコンポーネント登録
+            if system_health_available and module_name in ['pandas', 'numpy', 'sklearn', 'matplotlib', 'tensorflow']:
+                register_component_ready(module_name.split('.')[-1], {
+                    "import_time": import_time,
+                    "version": getattr(module, "__version__", "unknown")
+                })
         
         _import_cache[module_name] = module
         return module
     except ImportError as e:
         logger.error(f"モジュール {module_name} のインポートに失敗: {e}")
+        
+        # システム健全性モジュールがある場合はエラー登録
+        if system_health_available and module_name in ['pandas', 'numpy', 'sklearn', 'matplotlib', 'tensorflow']:
+            set_component_error(module_name.split('.')[-1], str(e))
+            
         raise
 
 

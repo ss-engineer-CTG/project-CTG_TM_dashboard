@@ -3,22 +3,10 @@ import {
   DashboardMetrics, 
   RecentTasks,
   ErrorInfo,
-  ProgressDistribution,
-  DurationDistribution,
-  ProjectSummary // ProjectSummary をインポートに追加
+  ProjectSummary 
 } from './models';
 
 // コンポーネントProps型定義
-
-export interface DashboardChartsProps {
-  metrics: DashboardMetrics;
-  isLoading: boolean;
-}
-
-export interface DurationChartProps {
-  data: DurationDistribution;
-  isLoading: boolean;
-}
 
 export interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -44,18 +32,13 @@ export interface HeaderProps {
 }
 
 export interface MetricsCardsProps {
-  summary: ProjectSummary; // Project['project_summary'] から ProjectSummary に修正
+  summary: ProjectSummary;
   isLoading: boolean;
 }
 
 export interface ProgressBarProps {
   progress: number;
   color: string;
-}
-
-export interface ProgressChartProps {
-  data: ProgressDistribution;
-  isLoading: boolean;
 }
 
 export interface ProjectTableProps {

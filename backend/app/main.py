@@ -37,6 +37,7 @@ record_stage('initialization_start')
 is_optimized = os.environ.get('FASTAPI_STARTUP_OPTIMIZE') == '1'
 streamlined_logging = os.environ.get('STREAMLINED_LOGGING') == '1'
 debug_mode = os.environ.get('DEBUG') == '1'
+system_health_enabled = os.environ.get('SYSTEM_HEALTH_ENABLED') == '1'
 
 # ロギング設定 - デバッグモードでロギングレベルを変更
 log_level = logging.INFO if debug_mode else logging.WARNING if is_optimized else logging.INFO
@@ -73,6 +74,11 @@ def preload_modules():
             'app.services.async_loader'
         ]
         
+        # システム健全性モジュールが有効な場合は追加
+        if system_health_enabled:
+            modules_to_preload.append('app.services.system_health')
+            modules_to_preload.append('app.routers.system')
+        
         for module_name in modules_to_preload:
             try:
                 start_time = time.time()
@@ -93,10 +99,10 @@ def preload_modules():
 if is_optimized:
     preload_modules()
 
-# より強力なポート確認と割り当てロジック
+# より強力なポート確認と割り当てロジック - 改善版
 def find_best_available_port(preferred_ports=[8000, 8080, 8888, 8081, 8001, 3001, 5000], timeout=1.0):
     """
-    ポート検出の高速化
+    ポート検出の高速化と改善
     
     Args:
         preferred_ports: 優先度順のポートリスト
@@ -107,22 +113,23 @@ def find_best_available_port(preferred_ports=[8000, 8080, 8888, 8081, 8001, 3001
     """
     import socket
     
-    # 特別な環境変数があればそのポートを最優先
-    env_port = os.environ.get('ELECTRON_PORT')
-    if env_port and env_port.isdigit():
-        logger.info(f"環境変数からポート {env_port} を優先します")
-        preferred_ports = [int(env_port)] + [p for p in preferred_ports if int(p) != int(env_port)]
-    
-    # コマンドライン引数があればそのポートを最優先
+    # コマンドライン引数（最優先）
     if len(sys.argv) > 1 and sys.argv[1].isdigit():
         arg_port = int(sys.argv[1])
-        if arg_port not in preferred_ports:
-            logger.info(f"コマンドライン引数からポート {arg_port} を最優先します")
-            preferred_ports = [arg_port] + [p for p in preferred_ports if p != arg_port]
+        logger.info(f"コマンドライン引数からポート {arg_port} を最優先します")
+        # コマンドライン引数は必ず使用する（存在チェックなし）
+        return arg_port
+    
+    # 環境変数（次に優先）
+    env_port = os.environ.get('ELECTRON_PORT') or os.environ.get('API_PORT')
+    if env_port and env_port.isdigit():
+        logger.info(f"環境変数からポート {env_port} を取得しました")
+        # 環境変数指定のポートも必ず使用
+        return int(env_port)
     
     record_stage('port_detection_start')
     
-    # 高速ポート検出 - 最適化バージョン
+    # ポート検索 (一時ファイルは検索しない - Electron側のみで扱う)
     for port in preferred_ports:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -157,15 +164,6 @@ async def run_background_tasks():
         if not data_dir.exists():
             logger.warning(f"データディレクトリがありません: {data_dir}")
         
-        # ポート情報ファイルの処理 - 環境変数より優先度が低い
-        try:
-            port_file_path = os.path.join(tempfile.gettempdir(), "project_dashboard_port.txt")
-            with open(port_file_path, "r") as f:
-                port = int(f.read().strip())
-                logger.debug(f"ポートファイルから読み込み: {port}")
-        except Exception:
-            pass
-            
         # パフォーマンス統計を出力
         logger.debug("バックグラウンドタスク完了")
         logger.debug("=== パフォーマンス統計 ===")
@@ -175,11 +173,27 @@ async def run_background_tasks():
     except Exception as e:
         logger.error(f"バックグラウンドタスクエラー: {str(e)}")
         logger.error(traceback.format_exc())
+        
+        # システム健全性モジュールがある場合はエラーを登録
+        if system_health_enabled:
+            try:
+                from app.services.system_health import set_component_error
+                set_component_error("background_tasks", str(e))
+            except ImportError:
+                pass
 
 # ライフスパンイベントマネージャ
 async def lifespan(app: FastAPI):
     """アプリケーションのライフスパンイベントを管理する"""
     record_stage('lifespan_start')
+    
+    # システム健全性モジュールの初期化
+    if system_health_enabled:
+        try:
+            from app.services.system_health import register_component_ready
+            logger.info("システム健全性モジュールを初期化しています...")
+        except ImportError:
+            logger.warning("システム健全性モジュールが見つかりません")
     
     # 全てのルーターを明示的に登録
     logger.info("ルーターを登録しています...")
@@ -190,6 +204,17 @@ async def lifespan(app: FastAPI):
         else:
             from app.routers import health
             app.include_router(health.router, prefix="/api", tags=["health"])
+        
+        # システム健全性ルーター - 条件に応じて登録
+        if system_health_enabled:
+            if 'app.routers.system' in preloaded_modules:
+                app.include_router(preloaded_modules['app.routers.system'].router, prefix="/api", tags=["system"])
+            else:
+                try:
+                    from app.routers import system
+                    app.include_router(system.router, prefix="/api", tags=["system"])
+                except ImportError:
+                    logger.warning("システムルーターをインポートできません")
         
         # 残りのルーターを直接登録
         from app.routers import projects, metrics, files
@@ -211,16 +236,19 @@ async def lifespan(app: FastAPI):
     logger.info(f"リッスンポート: {port}")
     logger.info(f"API URL: http://127.0.0.1:{port}/api")
     
+    # サーバーコンポーネントの準備完了を登録
+    if system_health_enabled:
+        try:
+            from app.services.system_health import register_component_ready
+            register_component_ready("server", {
+                "startup_time": time.time() - startup_time,
+                "port": port
+            })
+        except ImportError:
+            pass
+    
     # 非同期でバックグラウンドタスクを実行
     background_task = asyncio.create_task(run_background_tasks())
-    
-    # ポート情報を一時ファイルに保存
-    try:
-        port_file_path = os.path.join(tempfile.gettempdir(), "project_dashboard_port.txt")
-        with open(port_file_path, "w") as f:
-            f.write(str(port))
-    except Exception as e:
-        logger.error(f"ポート情報ファイルの作成エラー: {str(e)}")
     
     record_stage('application_startup_complete')
     print(f"*** API Server is running at: http://127.0.0.1:{port}/api ***")
@@ -303,94 +331,6 @@ def create_app(port=8000):
             response.headers["Access-Control-Allow-Origin"] = "*"
             
             return response
-    
-    # デスクトップアプリケーションからの終了シグナルを処理するためのシャットダウンエンドポイント
-    @app.post("/api/shutdown")
-    async def shutdown():
-        """アプリケーションを終了するエンドポイント"""
-        import asyncio
-        # 非同期でアプリケーションを終了
-        async def shutdown_app():
-            logger.info("シャットダウンリクエストを受信しました。アプリケーションを終了します。")
-            await asyncio.sleep(0.5)
-            os._exit(0)
-        
-        asyncio.create_task(shutdown_app())
-        return {"status": "shutting down"}
-    
-    # エラー詳細情報を取得するAPI（デバッグ用）
-    @app.get("/api/debug")
-    async def debug_info():
-        """デバッグ情報を提供するエンドポイント"""
-        if not debug_mode:
-            return {"message": "Debug mode is not enabled"}
-            
-        try:
-            import platform
-            try:
-                import psutil
-                
-                # システム情報
-                system_info = {
-                    "platform": platform.platform(),
-                    "python_version": sys.version,
-                    "python_path": sys.executable,
-                    "cwd": os.getcwd(),
-                    "app_dir": str(Path(__file__).parent),
-                }
-                
-                # プロセス情報
-                process = psutil.Process()
-                proc_info = {
-                    "pid": process.pid,
-                    "memory_usage_mb": process.memory_info().rss / (1024 * 1024),
-                    "cpu_percent": process.cpu_percent(interval=0.1),
-                    "threads": len(process.threads()),
-                    "create_time": process.create_time(),
-                    "uptime_sec": time.time() - process.create_time(),
-                }
-            except ImportError:
-                system_info = {
-                    "platform": platform.platform(),
-                    "python_version": sys.version,
-                    "python_path": sys.executable,
-                    "cwd": os.getcwd(),
-                    "app_dir": str(Path(__file__).parent),
-                }
-                proc_info = {"note": "psutil module not available"}
-            
-            # 環境変数
-            env_vars = {
-                "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
-                "PMSUITE_DASHBOARD_FILE": os.environ.get("PMSUITE_DASHBOARD_FILE", ""),
-                "APP_PATH": os.environ.get("APP_PATH", ""),
-                "ELECTRON_PORT": os.environ.get("ELECTRON_PORT", ""),
-            }
-            
-            # パフォーマンスメトリクス
-            perf_metrics = {
-                "startup_time": performance_metrics["startup_time"],
-                "stages": performance_metrics["stages"],
-                "total_startup_time": performance_metrics["stages"][-1]["time"] if performance_metrics["stages"] else 0,
-            }
-            
-            # キャッシュ情報
-            from app.services.data_processing import get_cache_stats
-            cache_info = get_cache_stats()
-            
-            return {
-                "system": system_info,
-                "process": proc_info,
-                "environment": env_vars,
-                "performance": perf_metrics,
-                "cache": cache_info,
-                "timestamp": time.time(),
-            }
-        except Exception as e:
-            return {
-                "error": str(e),
-                "traceback": traceback.format_exc(),
-            }
     
     record_stage('create_app_complete')
     return app
