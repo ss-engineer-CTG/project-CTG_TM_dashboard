@@ -28,6 +28,11 @@ const setElectronReady = () => {
   window.electronReady = true;
   window.currentApiPort = null;
   window.apiInitialized = false;
+  window.systemHealth = {  // 新しいシステム健全性情報
+    status: 'initializing',
+    progress: 0,
+    lastChecked: Date.now()
+  };
   
   // DOM状態に応じたメタタグ追加の処理 - 最適化版
   const safelyAddMetaTag = () => {
@@ -128,6 +133,27 @@ contextBridge.exposeInMainWorld('electron', {
   
   // 一時ディレクトリのパスを取得
   getTempPath: () => ipcRenderer.invoke('get-temp-path'),
+  
+  // APIシステム健全性情報を取得
+  getSystemHealth: () => {
+    return window.systemHealth || {
+      status: 'unknown',
+      progress: 0,
+      lastChecked: Date.now()
+    };
+  },
+  
+  // APIシステム健全性情報を更新
+  updateSystemHealth: (data) => {
+    window.systemHealth = {
+      ...window.systemHealth,
+      ...data,
+      lastChecked: Date.now()
+    };
+  },
+  
+  // システム健全性の状態を確認
+  checkSystemHealth: () => ipcRenderer.invoke('get-system-health'),
   
   // ファイルシステム操作
   fs: {
@@ -237,6 +263,22 @@ if (IS_DEV_MODE) {
 
 // Electronが明示的に初期化されたことを示す変数を設定
 setElectronReady();
+
+// 定期的にシステム健全性を確認
+if (typeof window !== 'undefined') {
+  // 10秒ごとにシステム健全性を確認
+  setInterval(async () => {
+    try {
+      const healthStatus = await ipcRenderer.invoke('get-system-health');
+      window.systemHealth = {
+        ...healthStatus,
+        lastChecked: Date.now()
+      };
+    } catch (error) {
+      console.warn('システム健全性の確認に失敗:', error);
+    }
+  }, 10000);
+}
 
 // 準備完了ログ
 console.log(`Preload script completed in ${Date.now() - preloadStartTime}ms`);

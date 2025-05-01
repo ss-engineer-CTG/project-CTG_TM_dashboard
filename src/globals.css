@@ -8,6 +8,35 @@
   --primary-text: #ffffff;
   --secondary-text: #b3b3b3;
   --accent-color: #60cdff;
+  
+  /* 状態色の定義をCSS変数として一元管理 */
+  --color-status-success: #50ff96;
+  --color-status-warning: #ffeb45;
+  --color-status-danger: #ff5f5f;
+  --color-status-info: #60cdff;
+  --color-status-neutral: #c8c8c8;
+
+  /* shadcn/ui用の変数 */
+  --background: 220 2% 10%;
+  --foreground: 0 0% 100%;
+  --card: 222 2% 17%;
+  --card-foreground: 0 0% 100%;
+  --popover: 222 2% 17%;
+  --popover-foreground: 0 0% 100%;
+  --primary: 198 100% 69%; /* text-accentカラー */
+  --primary-foreground: 220 2% 10%;
+  --secondary: 220 2% 24%;
+  --secondary-foreground: 0 0% 100%;
+  --muted: 220 5% 25%;
+  --muted-foreground: 215 10% 75%;
+  --accent: 198 100% 69%;
+  --accent-foreground: 220 2% 10%;
+  --destructive: 0 100% 69%; /* status-dangerカラー */
+  --destructive-foreground: 210 20% 98%;
+  --border: 215 10% 30%;
+  --input: 215 10% 30%;
+  --ring: 198 100% 69%;
+  --radius: 0.5rem;
 }
 
 body {
@@ -40,7 +69,6 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
   font-size: 12px;
   text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
   z-index: 1;
@@ -100,7 +128,7 @@ body {
   color: var(--surface-color);
 }
 
-/* 通知のスタイル */
+/* 通知のスタイル - CSS変数を使用 */
 .notification {
   position: fixed;
   bottom: 20px;
@@ -113,18 +141,18 @@ body {
 }
 
 .notification-success {
-  background-color: #50ff96;
+  background-color: var(--color-status-success);
 }
 
 .notification-error {
-  background-color: #ff5f5f;
+  background-color: var(--color-status-danger);
 }
 
 .notification-info {
-  background-color: #60cdff;
+  background-color: var(--color-status-info);
 }
 
 .notification-warning {
-  background-color: #ffeb45;
+  background-color: var(--color-status-warning);
   color: #333;
 }

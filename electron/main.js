@@ -9,6 +9,10 @@ const axios = require('axios');
 const os = require('os');
 const http = require('http');
 
+// 新しいモジュールをインポート
+const BackendConnectionManager = require('./backend_connection_manager');
+const ProcessManager = require('./process_manager');
+
 // 設定ベースのアプローチ - 環境による分岐を最小化
 const config = {
   // 環境変数またはコマンドライン引数から設定を読み込む
@@ -20,6 +24,10 @@ const config = {
   optimizationEnabled: process.env.OPTIMIZATION === 'true' || true, // デフォルトで最適化を有効に変更
   useExternalBackend: process.env.EXTERNAL_BACKEND === 'true' || process.env.USE_EXTERNAL_BACKEND === 'true'
 };
+
+// グローバルインスタンス作成
+const connectionManager = new BackendConnectionManager();
+const processManager = new ProcessManager();
 
 // 安全なパス解決関数
 const getResourcePath = (relativePath) => {
@@ -68,13 +76,7 @@ let appIsQuitting = false;
 
 // 現在のAPIベースURL
 global.apiBaseUrl = `http://127.0.0.1:${config.apiPort}/api`;
-
-// サーバー起動検出の状態管理
-let startupDetectionState = {
-  startupMessageDetected: false,
-  runningMessageDetected: false,
-  connectionVerified: false
-};
+global.apiPort = parseInt(config.apiPort);
 
 // 初期化フェーズを記録
 console.log('Electron初期化開始');
@@ -112,101 +114,87 @@ const setupPlatformOptimizations = () => {
   
   // プリロード用バッファ
   app.commandLine.appendSwitch('--disk-cache-size=104857600'); // 100MB
-}
-
-// 既存のPythonプロセスをクリーンアップする関数
-async function cleanupExistingProcesses() {
-  // 対象となるポートのリスト
-  const ports = [8000, 8080, 8888, 8081, 8001, 3001, 5000];
-  let cleanedUpPids = [];
-  
-  console.log('既存のPythonプロセスをクリーンアップしています...');
-  
-  // ポート検索を実行
-  for (const port of ports) {
-    try {
-      const processes = await findProcess('port', port);
-      
-      // pythonプロセスのみを抽出
-      const pythonProcesses = processes.filter(p => 
-        p.name && p.name.toLowerCase().includes('python') && 
-        p.cmd && (p.cmd.toLowerCase().includes('main.py') || p.cmd.toLowerCase().includes('uvicorn'))
-      );
-      
-      if (pythonProcesses.length > 0) {
-        console.log(`ポート ${port} で ${pythonProcesses.length} 個のPythonプロセスを検出しました`);
-      }
-      
-      for (const proc of pythonProcesses) {
-        try {
-          console.log(`プロセス ${proc.pid} を終了します (${proc.name})...`);
-          process.kill(proc.pid, 'SIGTERM');
-          cleanedUpPids.push(proc.pid);
-        } catch (e) {
-          console.error(`プロセス ${proc.pid} の終了に失敗しました:`, e.message);
-        }
-      }
-    } catch (e) {
-      console.error(`ポート ${port} のプロセス検索エラー:`, e.message);
-    }
-  }
-  
-  // 終了したプロセスの終了を確認
-  if (cleanedUpPids.length > 0) {
-    console.log(`${cleanedUpPids.length}個のPythonプロセスの終了を待機中...`);
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    // 二次確認: プロセスが本当に終了したか確認
-    for (const pid of cleanedUpPids) {
-      try {
-        // プロセスが存在するか確認
-        process.kill(pid, 0);
-        // まだ存在する場合は強制終了
-        console.log(`プロセス ${pid} がまだ終了していません。強制終了します...`);
-        process.kill(pid, 'SIGKILL');
-      } catch (e) {
-        // エラーが発生した場合、プロセスは既に終了している
-      }
-    }
-  } else {
-    console.log('クリーンアップするプロセスは見つかりませんでした');
-  }
-}
-
-// API利用可能性チェック関数
-const verifyApiConnection = async (port, maxRetries = 5) => {
-  // 詳細なチェック
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      // axios経由でAPI確認
-      const response = await axios.get(`http://127.0.0.1:${port}/api/health`, {
-        timeout: 2000,
-        headers: { 'Accept': 'application/json' }
-      });
-      
-      if (response.status >= 200 && response.status < 300) {
-        return true;
-      }
-    } catch (e) {
-      // エラーは無視して次のチェックへ
-    }
-    
-    // 短い待機時間
-    if (i < maxRetries - 1) {
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-  }
-  
-  // 最終確認：起動メッセージ検出
-  if (startupDetectionState.startupMessageDetected || 
-      startupDetectionState.runningMessageDetected) {
-    return true;
-  }
-  
-  return false;
 };
 
-// FastAPIバックエンドを起動する関数 - 最適化版
+// 指定されたポートが使用可能かをチェック
+const isPortAvailable = async (port) => {
+  return new Promise((resolve) => {
+    const server = require('net').createServer();
+    
+    server.once('error', () => {
+      resolve(false); // ポートは使用中
+    });
+    
+    server.once('listening', () => {
+      server.close();
+      resolve(true); // ポートは利用可能
+    });
+    
+    server.listen(port, '127.0.0.1');
+  });
+};
+
+// 改善されたポート検出関数
+const findAvailablePort = async (preferredPorts = [8000, 8080, 8888]) => {
+  console.log('使用可能なポートを検索しています...');
+  
+  // 一時ファイルからの読み込みを試みる
+  let lastUsedPort = null;
+  try {
+    const portFilePath = path.join(os.tmpdir(), 'project_dashboard_port.txt');
+    if (fs.existsSync(portFilePath)) {
+      const savedPort = parseInt(fs.readFileSync(portFilePath, 'utf-8').trim());
+      if (!isNaN(savedPort) && savedPort > 0) {
+        lastUsedPort = savedPort;
+        console.log(`前回使用ポート ${lastUsedPort} を検出しました`);
+        
+        // 前回ポートが使用可能かチェック
+        if (await isPortAvailable(lastUsedPort)) {
+          console.log(`前回使用ポート ${lastUsedPort} が利用可能です`);
+          return lastUsedPort;
+        } else {
+          console.log(`前回使用ポート ${lastUsedPort} は使用中です`);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('保存されたポート情報の読み込みに失敗:', err.message);
+  }
+  
+  // 環境変数で指定されたポートを優先
+  const envPort = process.env.API_PORT || process.env.ELECTRON_PORT;
+  if (envPort && !isNaN(parseInt(envPort))) {
+    const port = parseInt(envPort);
+    if (await isPortAvailable(port)) {
+      console.log(`環境変数で指定されたポート ${port} が利用可能です`);
+      return port;
+    } else {
+      console.log(`環境変数で指定されたポート ${port} は使用中です`);
+    }
+  }
+  
+  // 優先ポートのリストから使用可能なポートを探す
+  for (const port of preferredPorts) {
+    if (await isPortAvailable(port)) {
+      console.log(`ポート ${port} が利用可能です`);
+      return port;
+    }
+  }
+  
+  // 動的にランダムな空きポートを探す（最終手段）
+  let dynamicPort = 8000;
+  while (dynamicPort < 9000) {
+    if (await isPortAvailable(dynamicPort)) {
+      console.log(`動的に割り当てたポート ${dynamicPort} が利用可能です`);
+      return dynamicPort;
+    }
+    dynamicPort += 1;
+  }
+  
+  throw new Error('使用可能なポートが見つかりません');
+};
+
+// FastAPIバックエンドを起動する関数 - 改善版
 async function startFastApi() {
   try {
     // 外部バックエンドの使用確認
@@ -214,61 +202,30 @@ async function startFastApi() {
                               process.env.USE_EXTERNAL_BACKEND === 'true' ||
                               config.useExternalBackend;
     
-    // リセットオブジェクト状態
-    startupDetectionState = {
-      startupMessageDetected: false,
-      runningMessageDetected: false,
-      connectionVerified: false
-    };
-
-    // ポート情報を一時ファイルから読み込み
-    let selectedPort = parseInt(config.apiPort);
-    let portFilePath = path.join(os.tmpdir(), 'project_dashboard_port.txt');
+    // 既存プロセスをクリーンアップ
+    await processManager.cleanupExistingProcesses();
     
-    try {
-      if (fs.existsSync(portFilePath)) {
-        const portFromFile = fs.readFileSync(portFilePath, 'utf-8').trim();
-        if (portFromFile && !isNaN(parseInt(portFromFile))) {
-          selectedPort = parseInt(portFromFile);
-          console.log(`一時ファイルからポート ${selectedPort} を取得しました`);
-        }
-      }
-    } catch (err) {
-      console.warn('ポート情報ファイルの読み込みに失敗:', err.message);
-    }
-    
+    // 使用可能なポートを検出
+    const selectedPort = await findAvailablePort();
     console.log(`バックエンドサーバー用にポート ${selectedPort} を選択しました`);
+    
+    // グローバル変数に設定
+    global.apiBaseUrl = `http://127.0.0.1:${selectedPort}/api`;
+    global.apiPort = selectedPort;
     
     // 外部バックエンドを使用する場合は、既存の接続をチェック
     if (useExternalBackend) {
       console.log('外部バックエンドモードを使用: バックエンドの起動をスキップします');
       
-      // 接続確認 - 先に確認して早期リターン
-      const isConnected = await verifyApiConnection(selectedPort, 3);
-      if (isConnected) {
+      // 接続確認
+      const isReady = await connectionManager.waitForReadiness(selectedPort);
+      if (isReady) {
         console.log(`既存のバックエンドサーバーに接続成功（ポート: ${selectedPort}）`);
-        global.apiBaseUrl = `http://127.0.0.1:${selectedPort}/api`;
-        startupDetectionState.connectionVerified = true;
         return selectedPort;
       } else {
         console.warn(`外部バックエンドへの接続に失敗しました（ポート: ${selectedPort}）`);
         console.warn('内部バックエンド起動に切り替えます');
       }
-    }
-
-    // 既存のプロセスをクリーンアップ
-    await cleanupExistingProcesses();
-    
-    // デフォルトポート設定
-    selectedPort = parseInt(config.apiPort);
-    
-    console.log(`バックエンドサーバー用にポート ${selectedPort} を選択しました`);
-    
-    // ポート情報を一時ファイルに保存
-    try {
-      fs.writeFileSync(portFilePath, selectedPort.toString());
-    } catch (err) {
-      console.warn('ポート情報ファイルの保存に失敗:', err.message);
     }
 
     // 一貫したパス解決を使用
@@ -325,29 +282,13 @@ async function startFastApi() {
       }
     }
 
-    // タイムアウト基準値
-    const STARTUP_TIMEOUT = 30000;
-    
-    console.log(`バックエンドサーバーを起動します: ${pythonPath} ${scriptPath} ${selectedPort}`);
-
-    // FastAPIプロセスを起動 - 最適化モードを追加
-    fastApiProcess = spawn(pythonPath, [scriptPath, selectedPort.toString()], {
-      stdio: 'pipe',
-      detached: false,
-      cwd: backendDir,
-      env: { 
-        ...process.env, 
-        PYTHONPATH: backendDir,
-        USE_ELECTRON_DIALOG: "true",
-        PYTHONIOENCODING: "utf-8",
-        PYTHONLEGACYWINDOWSSTDIO: "1",
-        ELECTRON_PORT: selectedPort.toString(),
-        PYTHONOPTIMIZE: "1",
-        FASTAPI_STARTUP_OPTIMIZE: "1", // 最適化モードを常に有効化
-        STREAMLINED_LOGGING: "1",
-        DEBUG: config.debug ? "1" : "0"
-      }
-    });
+    // FastAPIプロセスを起動
+    fastApiProcess = processManager.startProcess(
+      pythonPath, 
+      scriptPath, 
+      selectedPort,
+      { debug: config.debug }
+    );
 
     // バッファをUTF-8として処理
     fastApiProcess.stdout.setEncoding('utf-8');
@@ -355,35 +296,60 @@ async function startFastApi() {
 
     // プロミスを返して接続が確立されるのを待つ
     return new Promise((resolve, reject) => {
-      // タイムアウト設定
+      // タイムアウト設定 - 最長1分
       const timeoutId = setTimeout(() => {
         reject(new Error('バックエンドサーバーの起動がタイムアウトしました'));
-      }, STARTUP_TIMEOUT);
+      }, 60000);
       
-      // 標準出力を監視して起動シグナルを検出
-      fastApiProcess.stdout.on('data', (data) => {
+      // イベントリスナーをセットアップして、進捗メッセージを表示
+      connectionManager.on('progress', (progress, components) => {
+        if (splashWindow && !splashWindow.isDestroyed()) {
+          splashWindow.webContents.send('startup-progress', { 
+            message: `バックエンドサーバーを初期化中... ${progress}%`, 
+            progress 
+          });
+        }
+      });
+      
+      // 標準出力を監視
+      fastApiProcess.stdout.on('data', async (data) => {
         const output = data.toString();
         console.log(`バックエンドログ: ${output.trim()}`);
         
-        // 初期化完了のメッセージを検知したら、すぐに接続確立とみなす（最適化）
+        // 起動メッセージを検知したら準備確認を開始
         if (output.includes('Application startup complete') || 
             output.includes('Uvicorn running') ||
             output.includes('API Server is running')) {
-          clearTimeout(timeoutId);
-          startupDetectionState.startupMessageDetected = true;
-          global.apiBaseUrl = `http://127.0.0.1:${selectedPort}/api`;
+            
+          // 早期メッセージ通知
+          if (splashWindow && !splashWindow.isDestroyed()) {
+            splashWindow.webContents.send('startup-progress', { 
+              message: `バックエンドサーバーを初期化中...`, 
+              progress: 50 
+            });
+          }
           
-          // ウィンドウを早期表示するために、メッセージ検出時点でresolve
-          resolve(selectedPort);
-          
-          // バックグラウンドで接続確認を行う
-          setTimeout(async () => {
-            const isConnected = await verifyApiConnection(selectedPort);
-            if (isConnected) {
-              startupDetectionState.connectionVerified = true;
-              console.log('バックエンド接続が確認されました');
+          try {
+            // 完全な準備ができるまで待機
+            const isReady = await connectionManager.waitForReadiness(selectedPort);
+            
+            // タイムアウトキャンセル
+            clearTimeout(timeoutId);
+            
+            if (isReady) {
+              // 準備完了
+              console.log(`バックエンドサーバーが起動完了しました (ポート: ${selectedPort})`);
+              resolve(selectedPort);
+            } else {
+              // 準備失敗
+              console.error('バックエンドサーバーの準備確認に失敗しました');
+              reject(new Error('バックエンドサーバーの準備確認に失敗しました'));
             }
-          }, 500);
+          } catch (error) {
+            clearTimeout(timeoutId);
+            console.error('バックエンド準備確認エラー:', error);
+            reject(error);
+          }
         }
       });
       
@@ -391,15 +357,6 @@ async function startFastApi() {
       fastApiProcess.stderr.on('data', (data) => {
         const output = data.toString();
         console.error(`バックエンドエラー: ${output.trim()}`);
-        
-        // エラー出力にも起動成功メッセージがある場合がある
-        if (output.includes('Application startup complete') || 
-            output.includes('Uvicorn running')) {
-          clearTimeout(timeoutId);
-          startupDetectionState.startupMessageDetected = true;
-          global.apiBaseUrl = `http://127.0.0.1:${selectedPort}/api`;
-          resolve(selectedPort);
-        }
       });
       
       // エラーハンドリング
@@ -410,19 +367,15 @@ async function startFastApi() {
       
       // プロセス終了時のハンドリング
       fastApiProcess.on('close', (code) => {
-        // 成功フラグが立っていれば、プロセス終了は無視
-        if (startupDetectionState.connectionVerified) return;
-        
         // サーバーが正常に起動した後に終了した場合
-        if (startupDetectionState.startupMessageDetected || 
-            startupDetectionState.runningMessageDetected) {
+        if (connectionManager.state === 'ready') {
           console.warn(`バックエンドサーバープロセスが予期せず終了しました。終了コード: ${code}`);
-          // この段階でresolveかrejectが既に呼ばれているはず
-        } else {
-          // サーバーが起動前に終了した場合
-          clearTimeout(timeoutId);
-          reject(new Error(`FastAPIサーバーの起動に失敗しました。終了コード: ${code}`));
+          return;
         }
+        
+        // サーバーが起動前に終了した場合
+        clearTimeout(timeoutId);
+        reject(new Error(`FastAPIサーバーの起動に失敗しました。終了コード: ${code}`));
         
         fastApiProcess = null;
       });
@@ -435,23 +388,29 @@ async function startFastApi() {
 
 // バックエンドサーバーを再起動する関数
 async function restartBackendServer() {
-  // 既存のプロセスがあれば終了
-  if (fastApiProcess !== null) {
-    try {
-      console.log('既存のバックエンドサーバーを終了します...');
-      fastApiProcess.kill();
-      await new Promise(resolve => setTimeout(resolve, 1000)); // 終了を待機
-    } catch (e) {
-      console.error('プロセス終了エラー:', e.message);
-    }
-    fastApiProcess = null;
+  // 冗長な再起動を防ぐためのセマフォ
+  if (processManager.isRestartInProgress) {
+    console.log('再起動はすでに進行中です');
+    return global.apiPort;
   }
   
-  // バックエンドサーバーを再起動
+  processManager.isRestartInProgress = true;
+  
   try {
-    const port = await startFastApi();
-    console.log(`バックエンドサーバーが再起動されました (ポート: ${port})`);
+    // 既存のプロセスを適切に終了
+    if (fastApiProcess !== null) {
+      await processManager.stopProcess(global.apiPort || config.apiPort);
+      fastApiProcess = null;
+    }
     
+    // バックエンドサーバーを再起動
+    console.log('バックエンドサーバーを再起動します...');
+    connectionManager.reset();
+    
+    const port = await startFastApi();
+    global.apiPort = port;
+    
+    // 接続情報を通知
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('api-connection-established', {
         port: port,
@@ -459,10 +418,13 @@ async function restartBackendServer() {
       });
     }
     
+    console.log(`バックエンドサーバーが再起動され、完全に準備ができました (ポート: ${port})`);
     return port;
   } catch (error) {
     console.error('バックエンドサーバー再起動エラー:', error);
     throw error;
+  } finally {
+    processManager.isRestartInProgress = false;
   }
 }
 
@@ -698,6 +660,7 @@ function createWindow() {
         // グローバル変数の設定
         window.electronReady = true;
         window.electronInitTime = ${Date.now()};
+        window.apiPort = ${global.apiPort};
         
         // メタタグを追加
         if (!document.querySelector('meta[name="electron-ready"]')) {
@@ -743,12 +706,16 @@ const setupEnvironmentVariables = () => {
   // 最適化フラグを設定
   process.env.OPTIMIZATION = config.optimizationEnabled ? 'true' : 'false';
   
+  // システム健全性を有効化
+  process.env.SYSTEM_HEALTH_ENABLED = 'true';
+  
   // コンソールに明示的に出力
   console.log('環境変数設定:');
   console.log(`- APP_ROOT: ${process.env.APP_ROOT}`);
   console.log(`- BUILD_PATH: ${process.env.BUILD_PATH}`);
   console.log(`- API_PORT: ${process.env.API_PORT}`);
   console.log(`- OPTIMIZATION: ${process.env.OPTIMIZATION}`);
+  console.log(`- SYSTEM_HEALTH_ENABLED: ${process.env.SYSTEM_HEALTH_ENABLED}`);
 };
 
 // 起動シーケンス最適化 - 並列起動機能の強化
@@ -931,6 +898,27 @@ ipcMain.handle('api:request', async (event, method, path, params, data, options)
   }
 });
 
+// システム健全性チェック用のハンドラー
+ipcMain.handle('get-system-health', async () => {
+  try {
+    if (!global.apiPort) return { status: 'unknown', progress: 0 };
+    
+    const response = await axios.get(
+      `http://127.0.0.1:${global.apiPort}/api/system/readiness`,
+      { timeout: 2000 }
+    );
+    
+    return response.data;
+  } catch (error) {
+    return { 
+      status: 'error', 
+      progress: 0,
+
+      error: error.message
+    };
+  }
+});
+
 // ショートカットメッセージの処理
 ipcMain.on('shortcut-refresh-data', () => {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -984,22 +972,29 @@ app.on('window-all-closed', async () => {
         console.warn('APIシャットダウンエンドポイントに接続できませんでした:', error.message);
       }
       
-      // プロセスがまだ実行中の場合は強制終了
-      if (fastApiProcess && !fastApiProcess.killed) {        
-        // プロセス終了を試行
-        try {
-          console.log('SIGTERMシグナルでプロセスを終了しています...');
-          fastApiProcess.kill('SIGTERM');
-          
-          // 1秒待ってまだ終了していなければSIGKILLで強制終了
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          if (fastApiProcess && !fastApiProcess.killed) {
-            console.log('SIGKILLシグナルでプロセスを強制終了しています...');
-            fastApiProcess.kill('SIGKILL');
-          }
-        } catch (e) {
-          console.error('プロセス終了エラー:', e.message);
+      // プロセスがまだ実行中の場合は終了
+      if (fastApiProcess && !fastApiProcess.killed) {
+        console.log('SIGTERMシグナルでプロセスを終了しています...');
+        fastApiProcess.kill('SIGTERM');
+        
+        // 終了を待つ
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // まだ終了していない場合は強制終了
+        if (fastApiProcess && !fastApiProcess.killed) {
+          console.log('SIGKILLシグナルでプロセスを強制終了しています...');
+          fastApiProcess.kill('SIGKILL');
         }
+      }
+      
+      // PIDトラッキングファイルをクリア
+      try {
+        const pidFilePath = path.join(os.tmpdir(), 'project_dashboard_pids.txt');
+        if (fs.existsSync(pidFilePath)) {
+          fs.writeFileSync(pidFilePath, '');
+        }
+      } catch (err) {
+        console.warn('PIDトラッキングファイルのクリアに失敗:', err.message);
       }
     } catch (err) {
       console.error('FastAPIプロセス終了中のエラー:', err);

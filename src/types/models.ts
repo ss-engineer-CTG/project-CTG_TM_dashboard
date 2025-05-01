@@ -15,6 +15,9 @@ export interface Project {
   progress: number;
   duration: number;
   tasks?: Task[];
+  next_milestone?: string; // 次のマイルストーン情報を追加
+  has_delay: boolean; // 遅延フラグを修正: hasDelay -> has_delay (バックエンドの形式に合わせる)
+  milestones?: Milestone[]; // 新しいフィールド: マイルストーン一覧
 }
 
 export interface Task {
@@ -26,6 +29,28 @@ export interface Task {
   task_milestone: string;
 }
 
+// マイルストーンのステータス型
+export type MilestoneStatus = "completed" | "in-progress" | "not-started" | "delayed";
+
+// マイルストーンの型定義
+export interface Milestone {
+  id: string;
+  name: string;
+  description: string;
+  planned_date: string;
+  actual_date?: string;
+  status: MilestoneStatus;
+  category: string;
+  owner: string;
+  dependencies?: string[];
+  project_id: string;
+}
+
+// タイムラインレスポンスの型
+export interface MilestoneTimelineResponse {
+  projects: Project[];
+}
+
 export interface ProjectSummary {
   total_projects: number;
   active_projects: number;
@@ -33,20 +58,8 @@ export interface ProjectSummary {
   milestone_projects: number;
 }
 
-export interface ProgressDistribution {
-  ranges: string[];
-  counts: number[];
-}
-
-export interface DurationDistribution {
-  ranges: string[];
-  counts: number[];
-}
-
 export interface DashboardMetrics {
   summary: ProjectSummary;
-  progress_distribution: ProgressDistribution;
-  duration_distribution: DurationDistribution;
   last_updated: string;
 }
 

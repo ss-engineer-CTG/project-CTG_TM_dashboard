@@ -5,7 +5,9 @@ import {
   FileResponse, 
   RecentTasks, 
   HealthResponse, 
-  APIError
+  APIError,
+  Milestone,
+  MilestoneTimelineResponse
 } from '../types';
 
 // 安全なクライアントサイドチェック
@@ -558,6 +560,97 @@ export const selectFile = async (initialPath?: string): Promise<FileResponse> =>
 export const healthCheck = async (): Promise<HealthResponse> => {
   return withApiInitialized(async () => {
     const data = await apiClient.get<HealthResponse>('/health', undefined, { timeout: 5000 });
+    return data;
+  });
+};
+
+/**
+ * マイルストーン一覧を取得する
+ */
+export const getMilestones = async (filePath?: string, projectId?: string): Promise<Milestone[]> => {
+  return withApiInitialized(async () => {
+    const params: any = { file_path: filePath };
+    if (projectId) {
+      params.project_id = projectId;
+    }
+    
+    const data = await apiClient.get<Milestone[]>(
+      '/milestones',
+      params,
+      { timeout: 8000 }
+    );
+    return data;
+  }, `milestones_${filePath || 'default'}_${projectId || 'all'}`, 5000); // 5秒キャッシュ
+};
+
+/**
+ * タイムライン表示用のマイルストーンデータを取得する
+ */
+export const getMilestoneTimeline = async (filePath?: string): Promise<MilestoneTimelineResponse> => {
+  return withApiInitialized(async () => {
+    const data = await apiClient.get<MilestoneTimelineResponse>(
+      '/milestones/timeline',
+      { file_path: filePath },
+      { timeout: 8000 }
+    );
+    return data;
+  }, `milestone_timeline_${filePath || 'default'}`, 5000); // 5秒キャッシュ
+};
+
+/**
+ * マイルストーンの詳細を取得する
+ */
+export const getMilestone = async (milestoneId: string, filePath?: string): Promise<Milestone> => {
+  return withApiInitialized(async () => {
+    const data = await apiClient.get<Milestone>(
+      `/milestones/${milestoneId}`,
+      { file_path: filePath },
+      { timeout: 8000 }
+    );
+    return data;
+  }, `milestone_${milestoneId}_${filePath || 'default'}`, 5000); // 5秒キャッシュ
+};
+
+/**
+ * マイルストーンを作成する
+ */
+export const createMilestone = async (milestone: Milestone, filePath?: string): Promise<Milestone> => {
+  return withApiInitialized(async () => {
+    const data = await apiClient.post<Milestone>(
+      '/milestones',
+      milestone,
+      { file_path: filePath },
+      { timeout: 8000 }
+    );
+    return data;
+  });
+};
+
+/**
+ * マイルストーンを更新する
+ */
+export const updateMilestone = async (milestoneId: string, milestone: Milestone, filePath?: string): Promise<Milestone> => {
+  return withApiInitialized(async () => {
+    const data = await apiClient.put<Milestone>(
+      `/milestones/${milestoneId}`,
+      milestone,
+      { file_path: filePath },
+      { timeout: 8000 }
+    );
+    return data;
+  });
+};
+
+/**
+ * マイルストーンを削除する
+ */
+export const deleteMilestone = async (milestoneId: string, filePath?: string): Promise<{ success: boolean; message: string }> => {
+  return withApiInitialized(async () => {
+    const data = await apiClient.delete<{ success: boolean; message: string }>(
+      `/milestones/${milestoneId}`,
+      { file_path: filePath },
+      { timeout: 8000 }
+    );
     return data;
   });
 };

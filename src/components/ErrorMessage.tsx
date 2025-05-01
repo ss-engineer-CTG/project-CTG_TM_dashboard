@@ -7,18 +7,18 @@ const ErrorMessage: React.FC<ErrorMessageProps> = ({ message, details, onRetry }
   return (
     <div className="dashboard-card bg-red-900 bg-opacity-20 mb-4">
       <div className="flex items-start">
-        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-red-500 mr-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-status-danger mr-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
         <div className="flex-1">
-          <h3 className="text-red-400 font-medium">エラーが発生しました</h3>
+          <h3 className="text-status-danger font-medium">エラーが発生しました</h3>
           <p className="mt-1 text-white">{message}</p>
           
           {details && (
             <div className="mt-2">
               <button
                 onClick={() => setShowDetails(!showDetails)}
-                className="text-red-300 text-sm hover:text-red-100 flex items-center"
+                className="text-status-danger text-sm hover:opacity-80 flex items-center"
                 aria-expanded={showDetails}
                 aria-controls="error-details"
               >
@@ -51,7 +51,7 @@ const ErrorMessage: React.FC<ErrorMessageProps> = ({ message, details, onRetry }
         <div className="mt-4 flex justify-end">
           <button
             onClick={onRetry}
-            className="bg-red-600 hover:bg-red-700 text-white text-sm py-1 px-3 rounded transition-colors"
+            className="bg-status-danger hover:opacity-90 text-white text-sm py-1 px-3 rounded transition-colors"
           >
             再試行
           </button>

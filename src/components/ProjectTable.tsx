@@ -1,4 +1,4 @@
-import React, { useMemo, lazy } from 'react';
+import React, { useMemo, lazy, useEffect } from 'react';
 import { ProjectTableProps } from '../types';
 import { LazyLoadWrapper } from './LazyLoadWrapper';
 
@@ -15,16 +15,42 @@ const ProjectTable: React.FC<ProjectTableProps> = ({ projects, isLoading, onOpen
     if (progress >= 50) return '#ffeb45'; // warning
     return '#c8c8c8'; // neutral
   };
+  
+  // 状態テキストの色を取得 - 改善版
+  const getStatusTextClass = (statusText: string): string => {
+    // デバッグログ追加
+    console.log(`Status text for class: "${statusText}"`);
+    
+    // 文字列を正規化
+    const normalizedText = statusText.trim();
+    
+    // 部分一致を許容する堅牢な実装
+    if (normalizedText.includes('遅延')) return 'text-status-danger';
+    if (normalizedText.includes('進行')) return 'text-status-info';
+    if (normalizedText.includes('完了')) return 'text-status-success';
+    
+    // 一致しない場合はデフォルト
+    console.log(`No match found for: "${normalizedText}"`);
+    return 'text-text-primary';
+  };
 
   // プロジェクト表示用データをメモ化
   const projectRows = useMemo(() => {
     if (!projects || projects.length === 0) return [];
     
     return projects.map(project => {
-      const hasDelay = false; // APIから取得する必要があります
+      // バックエンドから取得した遅延フラグを使用
+      const hasDelay = project.has_delay;
       const statusColor = getStatusColor(project.progress, hasDelay);
       const status = hasDelay ? '遅延あり' : project.progress < 100 ? '進行中' : '完了';
-      const statusClass = hasDelay ? 'text-status-danger' : 'text-text-primary';
+      
+      // デバッグログ追加
+      console.log(`Project: ${project.project_name}`);
+      console.log(`Status: "${status}"`); // 引用符で囲んで空白を視覚化
+      
+      // 状態テキストに対応する色クラス
+      const statusClass = getStatusTextClass(status);
+      console.log(`Status Class: ${statusClass}`);
       
       return {
         project,
@@ -34,6 +60,19 @@ const ProjectTable: React.FC<ProjectTableProps> = ({ projects, isLoading, onOpen
         statusClass
       };
     });
+  }, [projects]);
+  
+  // コンポーネントロード時に追加のデバッグログ
+  useEffect(() => {
+    if (projects && projects.length > 0) {
+      console.log('Projects loaded:', projects.length);
+      
+      // サンプルプロジェクトのStatus値をデバッグ
+      const sampleProject = projects[0];
+      const status = sampleProject.has_delay ? '遅延あり' : sampleProject.progress < 100 ? '進行中' : '完了';
+      console.log(`Sample project status: "${status}"`);
+      console.log(`Class for sample: ${getStatusTextClass(status)}`);
+    }
   }, [projects]);
 
   // ローディング表示
@@ -91,8 +130,19 @@ const ProjectTable: React.FC<ProjectTableProps> = ({ projects, isLoading, onOpen
                     <ProgressBar progress={project.progress} color={statusColor} />
                   </LazyLoadWrapper>
                 </td>
-                <td className={`min-w-[100px] ${statusClass}`}>{status}</td>
-                <td className="min-w-[200px]">-</td>
+                {/* 状態列 - カラークラスを適用 + フォールバックとしてインラインスタイルも追加 */}
+                <td 
+                  className={`min-w-[100px] ${statusClass} font-medium`}
+                  style={{ 
+                    color: status.includes('遅延') ? '#ff5f5f' : 
+                           status.includes('進行') ? '#60cdff' : 
+                           status.includes('完了') ? '#50ff96' : 
+                           undefined 
+                  }}
+                >
+                  {status}
+                </td>
+                <td className="min-w-[200px]">{project.next_milestone || '-'}</td>
                 <td className="min-w-[100px] text-center">
                   {project.completed_tasks}/{project.total_tasks}
                 </td>

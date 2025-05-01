@@ -11,8 +11,8 @@ import os
 import logging
 import functools
 import time
-from typing import Optional, Dict, Any, List
 import traceback
+from typing import Optional, Dict, Any, List
 from pathlib import Path
 
 # ロガー設定
@@ -61,8 +61,8 @@ async def initialize_data_processing():
     # 必要なモジュールをバックグラウンドでインポート
     pd = import_pandas()
     datetime = import_datetime()
-    concurrent_module = lazy_import("concurrent.futures")
-    concurrent = concurrent_module.futures
+    # エラーの修正: concurrent.futures は単独のモジュール
+    concurrent = lazy_import("concurrent.futures")
     
     # デフォルトパスを非同期で解決
     _default_dashboard_path = await run_in_threadpool(resolve_dashboard_path)
@@ -70,7 +70,6 @@ async def initialize_data_processing():
     logger.info("データ処理モジュールの初期化が完了しました")
     
     return True
-
 
 def cache_result(ttl_seconds: int = 300, max_entries: int = _MAX_CACHE_ENTRIES):
     """関数の結果をキャッシュするデコレータ - 最適化版"""
@@ -376,7 +375,7 @@ async def async_load_and_process_data(dashboard_file_path: Optional[str] = None)
 
 def check_delays(df):
     """
-    遅延タスクの検出
+    遅延タスクの検出 - 修正版
     
     Args:
         df: データフレーム
@@ -388,12 +387,25 @@ def check_delays(df):
     global datetime
     if datetime is None:
         datetime = import_datetime()
-        
-    current_date = datetime.datetime.now()
-    return df[
-        (df['task_finish_date'] < current_date) & 
+    
+    # 現在日付から時刻情報を削除して日付のみで比較
+    current_date = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    # デバッグログ追加
+    logger.info(f"遅延検出: 現在日付 = {current_date.date()}")
+    
+    # 明示的に日付部分のみを比較
+    delayed_tasks = df[
+        (df['task_finish_date'].dt.date < current_date.date()) & 
         (df['task_status'] != '完了')
     ]
+    
+    # 検出された遅延タスクの基本情報をログ出力
+    logger.info(f"遅延タスク検出: {len(delayed_tasks)}件")
+    if not delayed_tasks.empty:
+        logger.info(f"遅延プロジェクトID: {delayed_tasks['project_id'].unique()}")
+    
+    return delayed_tasks
 
 
 @cache_result(ttl_seconds=60)  # 1分キャッシュ
@@ -608,31 +620,62 @@ def get_status_color(progress: float, has_delay: bool) -> str:
 
 
 @cache_result(ttl_seconds=60)  # 1分キャッシュ
-def get_next_milestone(df):
+def get_next_milestone(df, include_past=False):
     """
-    次のマイルストーンを取得
+    次のマイルストーンを取得（過去のマイルストーンも含めるオプション付き）
     
     Args:
         df: データフレーム
+        include_past: 過去のマイルストーンも含めるかどうか
         
     Returns:
-        次のマイルストーンのデータフレーム
+        マイルストーンのデータフレーム
     """
     # 遅延インポート
-    global datetime
+    global datetime, pd
     if datetime is None:
         datetime = import_datetime()
+    if pd is None:
+        pd = import_pandas()
         
     current_date = datetime.datetime.now()
-    return df[
-        (df['task_milestone'] == '○') & 
-        (df['task_finish_date'] > current_date)
-    ].sort_values('task_finish_date')
+    
+    # マイルストーン列の状態をログ出力
+    if 'task_milestone' in df.columns:
+        unique_values = df['task_milestone'].unique()
+        logger.info(f"task_milestone列のユニーク値: {unique_values}")
+        milestone_count = df[df['task_milestone'] == '○'].shape[0]
+        logger.info(f"'○'マークのあるタスク数: {milestone_count}")
+    
+    # 現在日付との比較情報をログ出力
+    logger.info(f"現在日付: {current_date}")
+    if 'task_finish_date' in df.columns:
+        future_dates = df[df['task_finish_date'] > current_date].shape[0]
+        logger.info(f"現在日付より未来の日付を持つタスク数: {future_dates}")
+    
+    # マイルストーン基本条件
+    milestone_condition = df['task_milestone'] == '○'
+    
+    # 日付フィルタリング（オプション）
+    if not include_past:
+        milestone_condition = milestone_condition & (df['task_finish_date'] > current_date)
+    
+    # ログ出力を追加
+    milestone_count = df[milestone_condition].shape[0]
+    logger.info(f"マイルストーン条件に一致したタスク数: {milestone_count}")
+    
+    # 空の結果に対するフォールバック処理
+    result = df[milestone_condition].sort_values('task_finish_date')
+    if result.empty and not include_past:
+        logger.info("未来のマイルストーンが見つからないため、過去のマイルストーンも含めます")
+        return get_next_milestone(df, True)  # 再帰呼び出しで過去も含める
+    
+    return result
 
 
 def next_milestone_format(next_milestones, project_id: str) -> str:
     """
-    マイルストーン表示のフォーマット
+    マイルストーン表示のフォーマット（強化版）
     
     Args:
         next_milestones: マイルストーンのデータフレーム
@@ -642,16 +685,44 @@ def next_milestone_format(next_milestones, project_id: str) -> str:
         フォーマット済みのマイルストーン文字列
     """
     # 遅延インポート
-    global datetime
+    global datetime, pd
     if datetime is None:
         datetime = import_datetime()
-        
-    milestone = next_milestones[next_milestones['project_id'] == project_id]
+    if pd is None:
+        pd = import_pandas()
+    
+    # プロジェクトIDを文字列として扱う
+    project_id_str = str(project_id)
+    
+    # プロジェクトIDに一致するマイルストーンをフィルタリング
+    milestone = next_milestones[next_milestones['project_id'].astype(str) == project_id_str]
+    
     if len(milestone) == 0:
         return '-'
-    next_date = milestone.iloc[0]['task_finish_date']
-    days_until = (next_date - datetime.datetime.now()).days
-    return f"{milestone.iloc[0]['task_name']} ({days_until}日後)"
+    
+    try:
+        next_date = milestone.iloc[0]['task_finish_date']
+        task_name = milestone.iloc[0]['task_name']
+        
+        # 日付が有効かチェック
+        if pd.isna(next_date):
+            return f"{task_name} (日付なし)"
+        
+        # 現在日付との差を計算
+        current_date = datetime.datetime.now()
+        days_diff = (next_date - current_date).days
+        
+        # 日付に応じたメッセージ
+        if days_diff > 0:
+            return f"{task_name} ({days_diff}日後)"
+        elif days_diff < 0:
+            return f"{task_name} ({abs(days_diff)}日前)"
+        else:
+            return f"{task_name} (本日)"
+            
+    except Exception as e:
+        logger.error(f"マイルストーン表示フォーマットエラー: {e}")
+        return '-'
 
 
 @cache_result(ttl_seconds=30)  # 30秒キャッシュ
@@ -690,19 +761,20 @@ def get_recent_tasks(df, project_id: str) -> Dict[str, Any]:
             }
         
         # 遅延中タスク - boolean マスクを使用した高速フィルタリング
-        delay_mask = ((project_tasks['task_finish_date'] < current_date) & 
+        # 日付の比較方法を修正 - 日付部分のみを比較
+        delay_mask = ((project_tasks['task_finish_date'].dt.date < current_date.date()) & 
                      (project_tasks['task_status'] != '完了'))
         delayed_tasks = project_tasks[delay_mask].sort_values('task_finish_date')
         
         # 進行中タスク
         progress_mask = ((project_tasks['task_status'] != '完了') & 
-                        (project_tasks['task_start_date'] <= current_date) &
-                        (project_tasks['task_finish_date'] >= current_date))
+                        (project_tasks['task_start_date'].dt.date <= current_date.date()) &
+                        (project_tasks['task_finish_date'].dt.date >= current_date.date()))
         in_progress_tasks = project_tasks[progress_mask].sort_values('task_finish_date')
         
         # 次のタスク
         next_mask = ((project_tasks['task_status'] != '完了') & 
-                    (project_tasks['task_start_date'] > current_date))
+                    (project_tasks['task_start_date'].dt.date > current_date.date()))
         next_tasks = project_tasks[next_mask].sort_values('task_start_date')
         
         # 結果の作成 - 高速化のためにlen()を使用
@@ -712,7 +784,7 @@ def get_recent_tasks(df, project_id: str) -> Dict[str, Any]:
         if len(delayed_tasks) > 0:
             result['delayed'] = {
                 'name': delayed_tasks.iloc[0]['task_name'],
-                'days_delayed': (current_date - delayed_tasks.iloc[0]['task_finish_date']).days
+                'days_delayed': (current_date.date() - delayed_tasks.iloc[0]['task_finish_date'].date()).days
             }
         else:
             result['delayed'] = None
@@ -721,7 +793,7 @@ def get_recent_tasks(df, project_id: str) -> Dict[str, Any]:
         if len(in_progress_tasks) > 0:
             result['in_progress'] = {
                 'name': in_progress_tasks.iloc[0]['task_name'],
-                'days_remaining': (in_progress_tasks.iloc[0]['task_finish_date'] - current_date).days
+                'days_remaining': (in_progress_tasks.iloc[0]['task_finish_date'].date() - current_date.date()).days
             }
         else:
             result['in_progress'] = None
@@ -730,7 +802,7 @@ def get_recent_tasks(df, project_id: str) -> Dict[str, Any]:
         if len(next_tasks) > 0:
             result['next_task'] = {
                 'name': next_tasks.iloc[0]['task_name'],
-                'days_until': (next_tasks.iloc[0]['task_start_date'] - current_date).days
+                'days_until': (next_tasks.iloc[0]['task_start_date'].date() - current_date.date()).days
             }
         else:
             result['next_task'] = None
@@ -739,7 +811,7 @@ def get_recent_tasks(df, project_id: str) -> Dict[str, Any]:
         if len(next_tasks) > 1:
             result['next_next_task'] = {
                 'name': next_tasks.iloc[1]['task_name'],
-                'days_until': (next_tasks.iloc[1]['task_start_date'] - current_date).days
+                'days_until': (next_tasks.iloc[1]['task_start_date'].date() - current_date.date()).days
             }
         else:
             result['next_next_task'] = None
@@ -759,6 +831,219 @@ def get_recent_tasks(df, project_id: str) -> Dict[str, Any]:
 async def async_get_recent_tasks(df, project_id: str) -> Dict[str, Any]:
     """プロジェクトの直近タスク情報取得 - 非同期版"""
     return await run_in_threadpool(get_recent_tasks, df, project_id)
+
+
+@cache_result(ttl_seconds=60)  # 60秒キャッシュ
+def get_project_milestones(df, project_id=None):
+    """
+    プロジェクトのマイルストーン情報を取得する
+    
+    Args:
+        df: データフレーム
+        project_id: プロジェクトID（指定がない場合は全プロジェクト）
+        
+    Returns:
+        マイルストーン情報のリスト
+    """
+    # 必要なモジュールを遅延インポート
+    global datetime, pd
+    if datetime is None:
+        datetime = import_datetime()
+    if pd is None:
+        pd = import_pandas()
+    
+    try:
+        # データフレームのエラーチェック
+        if df.empty or 'error' in df.columns:
+            logger.warning("マイルストーン取得: データフレームが空またはエラーを含んでいます")
+            return []
+        
+        # マイルストーンデータの抽出 (task_milestoneが設定されているタスク)
+        milestone_filter = df['task_milestone'] == '○'
+        if project_id:
+            # 指定プロジェクトのみフィルタリング - 明示的に文字列として比較
+            milestone_filter &= df['project_id'].astype(str) == str(project_id)
+        
+        milestone_df = df[milestone_filter].copy()
+        
+        if milestone_df.empty:
+            logger.info(f"マイルストーンが見つかりません (project_id: {project_id})")
+            return []
+        
+        # マイルストーンリストの構築
+        milestones = []
+        current_date = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        for _, row in milestone_df.iterrows():
+            try:
+                # タスクIDからマイルストーンIDを生成
+                milestone_id = f"m-{row['task_id']}"
+                
+                # 日付の取得と検証
+                finish_date = row['task_finish_date']
+                start_date = row['task_start_date'] if 'task_start_date' in row else None
+                
+                if pd.isna(finish_date):
+                    logger.warning(f"マイルストーン {milestone_id} の完了日が未設定です")
+                    continue
+                
+                # 状態の決定
+                if row['task_status'] == '完了':
+                    status = 'completed'
+                elif current_date > finish_date:
+                    status = 'delayed'
+                elif start_date and current_date >= start_date:
+                    status = 'in-progress'
+                else:
+                    status = 'not-started'
+                
+                # 依存関係の検索（同じプロジェクト内の先行するマイルストーン）
+                dependencies = []
+                
+                if start_date is not None:
+                    # 同プロジェクト内の先行するマイルストーンを探す
+                    prior_milestones = milestone_df[
+                        (milestone_df['project_id'] == row['project_id']) & 
+                        (milestone_df['task_finish_date'] < start_date)
+                    ]
+                    
+                    if not prior_milestones.empty:
+                        # 直近のマイルストーンを依存関係として追加
+                        latest_milestone = prior_milestones.sort_values('task_finish_date', ascending=False).iloc[0]
+                        dependencies.append(f"m-{latest_milestone['task_id']}")
+                
+                # マイルストーンオブジェクトの作成
+                milestone = {
+                    "id": milestone_id,
+                    "name": row['task_name'],
+                    "description": f"{row['task_name']}マイルストーン",
+                    "planned_date": finish_date.isoformat(),
+                    "actual_date": finish_date.isoformat() if status == 'completed' else None,
+                    "status": status,
+                    "category": row['process'] if 'process' in row else "default",
+                    "owner": row.get('owner', '') or '',  # 担当者情報があれば設定
+                    "dependencies": dependencies,
+                    "project_id": str(row['project_id'])
+                }
+                
+                milestones.append(milestone)
+            except Exception as e:
+                logger.error(f"マイルストーンの処理中にエラーが発生しました: {e}")
+                # エラーは無視して次のマイルストーンを処理
+                continue
+        
+        return milestones
+        
+    except Exception as e:
+        logger.error(f"マイルストーン情報の抽出エラー: {str(e)}")
+        logger.error(traceback.format_exc())
+        return []
+
+
+async def async_get_project_milestones(df, project_id=None):
+    """
+    プロジェクトのマイルストーン情報を非同期で取得する
+    
+    Args:
+        df: データフレーム
+        project_id: プロジェクトID（指定がない場合は全プロジェクト）
+        
+    Returns:
+        マイルストーン情報のリスト
+    """
+    return await run_in_threadpool(get_project_milestones, df, project_id)
+
+
+async def create_milestone(milestone, file_path=None):
+    """
+    マイルストーンを新規作成する（新しいタスクとして追加）
+    
+    Args:
+        milestone: 作成するマイルストーン情報
+        file_path: データファイルのパス（指定がない場合はデフォルト）
+        
+    Returns:
+        作成されたマイルストーン
+    """
+    try:
+        # データを読み込む
+        df = await async_load_and_process_data(file_path)
+        
+        # マイルストーンをタスクとして追加する処理
+        # （実際の実装は、CSVファイルに新しい行を追加する処理になります）
+        # ここでは簡略化のため、渡されたマイルストーンをそのまま返します
+        
+        logger.info(f"マイルストーン作成（ID: {milestone.id}, プロジェクト: {milestone.project_id}）")
+        
+        # 実際の実装では、CSVファイルに新しい行を追加し、
+        # task_milestone列を'○'に設定することになります
+        
+        return milestone
+    except Exception as e:
+        logger.error(f"マイルストーン作成エラー: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
+
+
+async def update_milestone(milestone_id, milestone, file_path=None):
+    """
+    マイルストーンを更新する（対応するタスクを更新）
+    
+    Args:
+        milestone_id: 更新するマイルストーンID
+        milestone: 更新内容
+        file_path: データファイルのパス（指定がない場合はデフォルト）
+        
+    Returns:
+        更新されたマイルストーン
+    """
+    try:
+        # データを読み込む
+        df = await async_load_and_process_data(file_path)
+        
+        # マイルストーンをタスクとして更新する処理
+        # （実際の実装は、CSVファイルの対応する行を更新する処理になります）
+        # ここでは簡略化のため、渡されたマイルストーンをそのまま返します
+        
+        logger.info(f"マイルストーン更新（ID: {milestone_id}, プロジェクト: {milestone.project_id}）")
+        
+        # 実際の実装では、CSVファイルの対応する行を更新することになります
+        
+        return milestone
+    except Exception as e:
+        logger.error(f"マイルストーン更新エラー: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
+
+
+async def delete_milestone(milestone_id, file_path=None):
+    """
+    マイルストーンを削除する（対応するタスクを削除またはマイルストーンフラグを解除）
+    
+    Args:
+        milestone_id: 削除するマイルストーンID
+        file_path: データファイルのパス（指定がない場合はデフォルト）
+        
+    Returns:
+        削除結果
+    """
+    try:
+        # データを読み込む
+        df = await async_load_and_process_data(file_path)
+        
+        # マイルストーンを削除する処理
+        # （実際の実装は、CSVファイルの対応する行を削除またはtask_milestone列を空にする処理になります）
+        
+        logger.info(f"マイルストーン削除（ID: {milestone_id}）")
+        
+        # 実際の実装では、CSVファイルの対応する行からマイルストーンフラグを
+        # 解除することになります（例：task_milestone列を空にする）
+        
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"マイルストーン削除エラー: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
 
 
 # キャッシュをクリアする関数

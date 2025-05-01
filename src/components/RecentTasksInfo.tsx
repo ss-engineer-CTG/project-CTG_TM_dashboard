@@ -36,7 +36,12 @@ const RecentTasksInfo: React.FC<RecentTasksInfoProps> = ({ projectId, filePath }
       <div>
         <span className="font-bold text-status-danger">遅延中: </span>
         {data.delayed ? (
-          <span className="text-text-primary">{data.delayed.name}</span>
+          <>
+            <span className="text-status-danger">{data.delayed.name}</span>
+            <span className="ml-1 text-status-danger text-xs">
+              ({data.delayed.days_delayed}日遅延)
+            </span>
+          </>
         ) : (
           <span className="italic text-text-secondary">なし</span>
         )}
@@ -45,7 +50,12 @@ const RecentTasksInfo: React.FC<RecentTasksInfoProps> = ({ projectId, filePath }
       <div>
         <span className="font-bold text-status-info">進行中: </span>
         {data.in_progress ? (
-          <span className="text-text-primary">{data.in_progress.name}</span>
+          <>
+            <span className="text-text-primary">{data.in_progress.name}</span>
+            <span className="ml-1 text-status-info text-xs">
+              (残り{data.in_progress.days_remaining}日)
+            </span>
+          </>
         ) : (
           <span className="italic text-text-secondary">なし</span>
         )}
@@ -54,7 +64,12 @@ const RecentTasksInfo: React.FC<RecentTasksInfoProps> = ({ projectId, filePath }
       <div>
         <span className="font-bold text-text-accent">次のタスク: </span>
         {data.next_task ? (
-          <span className="text-text-primary">{data.next_task.name}</span>
+          <>
+            <span className="text-text-primary">{data.next_task.name}</span>
+            <span className="ml-1 text-text-accent text-xs">
+              ({data.next_task.days_until}日後)
+            </span>
+          </>
         ) : (
           <span className="italic text-text-secondary">なし</span>
         )}
@@ -63,7 +78,12 @@ const RecentTasksInfo: React.FC<RecentTasksInfoProps> = ({ projectId, filePath }
       <div>
         <span className="font-bold text-text-secondary">次の次: </span>
         {data.next_next_task ? (
-          <span className="text-text-primary">{data.next_next_task.name}</span>
+          <>
+            <span className="text-text-primary">{data.next_next_task.name}</span>
+            <span className="ml-1 text-text-secondary text-xs">
+              ({data.next_next_task.days_until}日後)
+            </span>
+          </>
         ) : (
           <span className="italic text-text-secondary">なし</span>
         )}

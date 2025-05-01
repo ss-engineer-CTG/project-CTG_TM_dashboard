@@ -9,6 +9,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 // 遅延ロードするコンポーネント
 const Notification = lazy(() => import('./components/Notification'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
+const MilestoneDashboard = lazy(() => import('./pages/MilestoneDashboard')); // 追加
 
 const App: React.FC = () => {
   const [queryClient] = React.useState(() => new QueryClient({
@@ -52,6 +53,12 @@ const App: React.FC = () => {
                 <Route path="/" element={
                   <LazyLoadWrapper>
                     <Dashboard />
+                  </LazyLoadWrapper>
+                } />
+                {/* マイルストーンダッシュボードルートを追加 */}
+                <Route path="/milestones" element={
+                  <LazyLoadWrapper>
+                    <MilestoneDashboard />
                   </LazyLoadWrapper>
                 } />
               </Routes>
