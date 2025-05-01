@@ -11,8 +11,8 @@ import os
 import logging
 import functools
 import time
-from typing import Optional, Dict, Any, List
 import traceback
+from typing import Optional, Dict, Any, List
 from pathlib import Path
 
 # ロガー設定
@@ -831,6 +831,219 @@ def get_recent_tasks(df, project_id: str) -> Dict[str, Any]:
 async def async_get_recent_tasks(df, project_id: str) -> Dict[str, Any]:
     """プロジェクトの直近タスク情報取得 - 非同期版"""
     return await run_in_threadpool(get_recent_tasks, df, project_id)
+
+
+@cache_result(ttl_seconds=60)  # 60秒キャッシュ
+def get_project_milestones(df, project_id=None):
+    """
+    プロジェクトのマイルストーン情報を取得する
+    
+    Args:
+        df: データフレーム
+        project_id: プロジェクトID（指定がない場合は全プロジェクト）
+        
+    Returns:
+        マイルストーン情報のリスト
+    """
+    # 必要なモジュールを遅延インポート
+    global datetime, pd
+    if datetime is None:
+        datetime = import_datetime()
+    if pd is None:
+        pd = import_pandas()
+    
+    try:
+        # データフレームのエラーチェック
+        if df.empty or 'error' in df.columns:
+            logger.warning("マイルストーン取得: データフレームが空またはエラーを含んでいます")
+            return []
+        
+        # マイルストーンデータの抽出 (task_milestoneが設定されているタスク)
+        milestone_filter = df['task_milestone'] == '○'
+        if project_id:
+            # 指定プロジェクトのみフィルタリング - 明示的に文字列として比較
+            milestone_filter &= df['project_id'].astype(str) == str(project_id)
+        
+        milestone_df = df[milestone_filter].copy()
+        
+        if milestone_df.empty:
+            logger.info(f"マイルストーンが見つかりません (project_id: {project_id})")
+            return []
+        
+        # マイルストーンリストの構築
+        milestones = []
+        current_date = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        for _, row in milestone_df.iterrows():
+            try:
+                # タスクIDからマイルストーンIDを生成
+                milestone_id = f"m-{row['task_id']}"
+                
+                # 日付の取得と検証
+                finish_date = row['task_finish_date']
+                start_date = row['task_start_date'] if 'task_start_date' in row else None
+                
+                if pd.isna(finish_date):
+                    logger.warning(f"マイルストーン {milestone_id} の完了日が未設定です")
+                    continue
+                
+                # 状態の決定
+                if row['task_status'] == '完了':
+                    status = 'completed'
+                elif current_date > finish_date:
+                    status = 'delayed'
+                elif start_date and current_date >= start_date:
+                    status = 'in-progress'
+                else:
+                    status = 'not-started'
+                
+                # 依存関係の検索（同じプロジェクト内の先行するマイルストーン）
+                dependencies = []
+                
+                if start_date is not None:
+                    # 同プロジェクト内の先行するマイルストーンを探す
+                    prior_milestones = milestone_df[
+                        (milestone_df['project_id'] == row['project_id']) & 
+                        (milestone_df['task_finish_date'] < start_date)
+                    ]
+                    
+                    if not prior_milestones.empty:
+                        # 直近のマイルストーンを依存関係として追加
+                        latest_milestone = prior_milestones.sort_values('task_finish_date', ascending=False).iloc[0]
+                        dependencies.append(f"m-{latest_milestone['task_id']}")
+                
+                # マイルストーンオブジェクトの作成
+                milestone = {
+                    "id": milestone_id,
+                    "name": row['task_name'],
+                    "description": f"{row['task_name']}マイルストーン",
+                    "planned_date": finish_date.isoformat(),
+                    "actual_date": finish_date.isoformat() if status == 'completed' else None,
+                    "status": status,
+                    "category": row['process'] if 'process' in row else "default",
+                    "owner": row.get('owner', '') or '',  # 担当者情報があれば設定
+                    "dependencies": dependencies,
+                    "project_id": str(row['project_id'])
+                }
+                
+                milestones.append(milestone)
+            except Exception as e:
+                logger.error(f"マイルストーンの処理中にエラーが発生しました: {e}")
+                # エラーは無視して次のマイルストーンを処理
+                continue
+        
+        return milestones
+        
+    except Exception as e:
+        logger.error(f"マイルストーン情報の抽出エラー: {str(e)}")
+        logger.error(traceback.format_exc())
+        return []
+
+
+async def async_get_project_milestones(df, project_id=None):
+    """
+    プロジェクトのマイルストーン情報を非同期で取得する
+    
+    Args:
+        df: データフレーム
+        project_id: プロジェクトID（指定がない場合は全プロジェクト）
+        
+    Returns:
+        マイルストーン情報のリスト
+    """
+    return await run_in_threadpool(get_project_milestones, df, project_id)
+
+
+async def create_milestone(milestone, file_path=None):
+    """
+    マイルストーンを新規作成する（新しいタスクとして追加）
+    
+    Args:
+        milestone: 作成するマイルストーン情報
+        file_path: データファイルのパス（指定がない場合はデフォルト）
+        
+    Returns:
+        作成されたマイルストーン
+    """
+    try:
+        # データを読み込む
+        df = await async_load_and_process_data(file_path)
+        
+        # マイルストーンをタスクとして追加する処理
+        # （実際の実装は、CSVファイルに新しい行を追加する処理になります）
+        # ここでは簡略化のため、渡されたマイルストーンをそのまま返します
+        
+        logger.info(f"マイルストーン作成（ID: {milestone.id}, プロジェクト: {milestone.project_id}）")
+        
+        # 実際の実装では、CSVファイルに新しい行を追加し、
+        # task_milestone列を'○'に設定することになります
+        
+        return milestone
+    except Exception as e:
+        logger.error(f"マイルストーン作成エラー: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
+
+
+async def update_milestone(milestone_id, milestone, file_path=None):
+    """
+    マイルストーンを更新する（対応するタスクを更新）
+    
+    Args:
+        milestone_id: 更新するマイルストーンID
+        milestone: 更新内容
+        file_path: データファイルのパス（指定がない場合はデフォルト）
+        
+    Returns:
+        更新されたマイルストーン
+    """
+    try:
+        # データを読み込む
+        df = await async_load_and_process_data(file_path)
+        
+        # マイルストーンをタスクとして更新する処理
+        # （実際の実装は、CSVファイルの対応する行を更新する処理になります）
+        # ここでは簡略化のため、渡されたマイルストーンをそのまま返します
+        
+        logger.info(f"マイルストーン更新（ID: {milestone_id}, プロジェクト: {milestone.project_id}）")
+        
+        # 実際の実装では、CSVファイルの対応する行を更新することになります
+        
+        return milestone
+    except Exception as e:
+        logger.error(f"マイルストーン更新エラー: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
+
+
+async def delete_milestone(milestone_id, file_path=None):
+    """
+    マイルストーンを削除する（対応するタスクを削除またはマイルストーンフラグを解除）
+    
+    Args:
+        milestone_id: 削除するマイルストーンID
+        file_path: データファイルのパス（指定がない場合はデフォルト）
+        
+    Returns:
+        削除結果
+    """
+    try:
+        # データを読み込む
+        df = await async_load_and_process_data(file_path)
+        
+        # マイルストーンを削除する処理
+        # （実際の実装は、CSVファイルの対応する行を削除またはtask_milestone列を空にする処理になります）
+        
+        logger.info(f"マイルストーン削除（ID: {milestone_id}）")
+        
+        # 実際の実装では、CSVファイルの対応する行からマイルストーンフラグを
+        # 解除することになります（例：task_milestone列を空にする）
+        
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"マイルストーン削除エラー: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
 
 
 # キャッシュをクリアする関数

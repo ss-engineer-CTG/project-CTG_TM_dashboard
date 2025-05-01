@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
+from enum import Enum
 
 
 class Task(BaseModel):
@@ -12,8 +13,30 @@ class Task(BaseModel):
     task_milestone: str
 
 
+# マイルストーンのステータス列挙型
+class MilestoneStatus(str, Enum):
+    COMPLETED = "completed"
+    IN_PROGRESS = "in-progress"
+    NOT_STARTED = "not-started"
+    DELAYED = "delayed"
+
+
+# マイルストーンスキーマ
+class Milestone(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    planned_date: datetime
+    actual_date: Optional[datetime] = None
+    status: MilestoneStatus
+    category: Optional[str] = None
+    owner: Optional[str] = None
+    dependencies: Optional[List[str]] = None
+    project_id: str
+
+
 class Project(BaseModel):
-    # 数値か文字列のどちらでも受け入れるように型定義を修正
+    # 既存のフィールド
     project_id: str
     project_name: str
     process: str
@@ -29,7 +52,10 @@ class Project(BaseModel):
     duration: int
     tasks: List[Task] = []
     next_milestone: Optional[str] = None
-    has_delay: bool = False  # 遅延フラグを追加
+    has_delay: bool = False
+    
+    # 新しいフィールド
+    milestones: Optional[List[Milestone]] = None
 
 
 class ProjectSummary(BaseModel):
@@ -38,11 +64,9 @@ class ProjectSummary(BaseModel):
     delayed_projects: int
     milestone_projects: int
 
+
 class DashboardMetrics(BaseModel):
     summary: ProjectSummary
-    # チャート関連フィールドを削除
-    # progress_distribution: ProgressDistribution
-    # duration_distribution: DurationDistribution
     last_updated: str
 
 
@@ -61,3 +85,8 @@ class RecentTasks(BaseModel):
     in_progress: Optional[Dict[str, Any]] = None
     next_task: Optional[Dict[str, Any]] = None
     next_next_task: Optional[Dict[str, Any]] = None
+
+
+# タイムライン取得用レスポンススキーマ
+class MilestoneTimelineResponse(BaseModel):
+    projects: List[Project]

@@ -43,8 +43,7 @@ system_health_enabled = os.environ.get('SYSTEM_HEALTH_ENABLED') == '1'
 log_level = logging.INFO if debug_mode else logging.WARNING if is_optimized else logging.INFO
 logging.basicConfig(
     level=log_level,
-    format="%(asctime)s.%(msecs)03d - %(levelname)s: %(message)s" if streamlined_logging else "%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    format="%(levelname)s: %(message)s" if streamlined_logging else "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 
@@ -223,6 +222,14 @@ async def lifespan(app: FastAPI):
         app.include_router(projects.router, prefix="/api", tags=["projects"])
         app.include_router(metrics.router, prefix="/api", tags=["metrics"])
         app.include_router(files.router, prefix="/api", tags=["files"])
+        
+        # マイルストーンルーターを登録（追加部分）
+        try:
+            from app.routers import milestones
+            app.include_router(milestones.router, prefix="/api", tags=["milestones"])
+            logger.info("マイルストーンルーターが登録されました")
+        except ImportError as e:
+            logger.warning(f"マイルストーンルーターのインポートに失敗しました: {e}")
         
         logger.info("全てのルーターが正常に登録されました")
     except ImportError as e:

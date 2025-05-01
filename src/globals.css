@@ -15,6 +15,28 @@
   --color-status-danger: #ff5f5f;
   --color-status-info: #60cdff;
   --color-status-neutral: #c8c8c8;
+
+  /* shadcn/ui用の変数 */
+  --background: 220 2% 10%;
+  --foreground: 0 0% 100%;
+  --card: 222 2% 17%;
+  --card-foreground: 0 0% 100%;
+  --popover: 222 2% 17%;
+  --popover-foreground: 0 0% 100%;
+  --primary: 198 100% 69%; /* text-accentカラー */
+  --primary-foreground: 220 2% 10%;
+  --secondary: 220 2% 24%;
+  --secondary-foreground: 0 0% 100%;
+  --muted: 220 5% 25%;
+  --muted-foreground: 215 10% 75%;
+  --accent: 198 100% 69%;
+  --accent-foreground: 220 2% 10%;
+  --destructive: 0 100% 69%; /* status-dangerカラー */
+  --destructive-foreground: 210 20% 98%;
+  --border: 215 10% 30%;
+  --input: 215 10% 30%;
+  --ring: 198 100% 69%;
+  --radius: 0.5rem;
 }
 
 body {
