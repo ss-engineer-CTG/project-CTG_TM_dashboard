@@ -43,7 +43,8 @@ system_health_enabled = os.environ.get('SYSTEM_HEALTH_ENABLED') == '1'
 log_level = logging.INFO if debug_mode else logging.WARNING if is_optimized else logging.INFO
 logging.basicConfig(
     level=log_level,
-    format="%(levelname)s: %(message)s" if streamlined_logging else "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s.%(msecs)03d - %(levelname)s: %(message)s" if streamlined_logging else "%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 

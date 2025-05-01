@@ -28,6 +28,8 @@ class Project(BaseModel):
     progress: float
     duration: int
     tasks: List[Task] = []
+    next_milestone: Optional[str] = None
+    has_delay: bool = False  # 遅延フラグを追加
 
 
 class ProjectSummary(BaseModel):

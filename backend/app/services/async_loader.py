@@ -54,8 +54,9 @@ async def initialize_background_tasks():
         logger.info(f"{len(_initialization_tasks)}個の初期化タスクを開始します")
         
         try:
-            # 並列実行で高速化
-            results = await asyncio.gather(*_initialization_tasks, return_exceptions=True)
+            # 修正: 並列実行で高速化 - コルーチン関数自体を実行
+            task_coroutines = [task() for task in _initialization_tasks]  # ここを修正
+            results = await asyncio.gather(*task_coroutines, return_exceptions=True)
             
             # エラーチェック
             for i, result in enumerate(results):
@@ -105,7 +106,8 @@ def register_init_task(coro_func):
             logger.error(traceback.format_exc())
             raise
     
-    _initialization_tasks.append(wrapper())
+    # 修正: wrapper関数自体をリストに追加する（コルーチンオブジェクトではなく）
+    _initialization_tasks.append(wrapper)  # ここを修正: wrapper() → wrapper
     return wrapper
 
 

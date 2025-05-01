@@ -15,6 +15,8 @@ export interface Project {
   progress: number;
   duration: number;
   tasks?: Task[];
+  next_milestone?: string; // 次のマイルストーン情報を追加
+  has_delay: boolean; // 遅延フラグを修正: hasDelay -> has_delay (バックエンドの形式に合わせる)
 }
 
 export interface Task {

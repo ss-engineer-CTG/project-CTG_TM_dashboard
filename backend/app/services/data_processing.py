@@ -375,7 +375,7 @@ async def async_load_and_process_data(dashboard_file_path: Optional[str] = None)
 
 def check_delays(df):
     """
-    遅延タスクの検出
+    遅延タスクの検出 - 修正版
     
     Args:
         df: データフレーム
@@ -387,12 +387,25 @@ def check_delays(df):
     global datetime
     if datetime is None:
         datetime = import_datetime()
-        
-    current_date = datetime.datetime.now()
-    return df[
-        (df['task_finish_date'] < current_date) & 
+    
+    # 現在日付から時刻情報を削除して日付のみで比較
+    current_date = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    # デバッグログ追加
+    logger.info(f"遅延検出: 現在日付 = {current_date.date()}")
+    
+    # 明示的に日付部分のみを比較
+    delayed_tasks = df[
+        (df['task_finish_date'].dt.date < current_date.date()) & 
         (df['task_status'] != '完了')
     ]
+    
+    # 検出された遅延タスクの基本情報をログ出力
+    logger.info(f"遅延タスク検出: {len(delayed_tasks)}件")
+    if not delayed_tasks.empty:
+        logger.info(f"遅延プロジェクトID: {delayed_tasks['project_id'].unique()}")
+    
+    return delayed_tasks
 
 
 @cache_result(ttl_seconds=60)  # 1分キャッシュ
@@ -607,31 +620,62 @@ def get_status_color(progress: float, has_delay: bool) -> str:
 
 
 @cache_result(ttl_seconds=60)  # 1分キャッシュ
-def get_next_milestone(df):
+def get_next_milestone(df, include_past=False):
     """
-    次のマイルストーンを取得
+    次のマイルストーンを取得（過去のマイルストーンも含めるオプション付き）
     
     Args:
         df: データフレーム
+        include_past: 過去のマイルストーンも含めるかどうか
         
     Returns:
-        次のマイルストーンのデータフレーム
+        マイルストーンのデータフレーム
     """
     # 遅延インポート
-    global datetime
+    global datetime, pd
     if datetime is None:
         datetime = import_datetime()
+    if pd is None:
+        pd = import_pandas()
         
     current_date = datetime.datetime.now()
-    return df[
-        (df['task_milestone'] == '○') & 
-        (df['task_finish_date'] > current_date)
-    ].sort_values('task_finish_date')
+    
+    # マイルストーン列の状態をログ出力
+    if 'task_milestone' in df.columns:
+        unique_values = df['task_milestone'].unique()
+        logger.info(f"task_milestone列のユニーク値: {unique_values}")
+        milestone_count = df[df['task_milestone'] == '○'].shape[0]
+        logger.info(f"'○'マークのあるタスク数: {milestone_count}")
+    
+    # 現在日付との比較情報をログ出力
+    logger.info(f"現在日付: {current_date}")
+    if 'task_finish_date' in df.columns:
+        future_dates = df[df['task_finish_date'] > current_date].shape[0]
+        logger.info(f"現在日付より未来の日付を持つタスク数: {future_dates}")
+    
+    # マイルストーン基本条件
+    milestone_condition = df['task_milestone'] == '○'
+    
+    # 日付フィルタリング（オプション）
+    if not include_past:
+        milestone_condition = milestone_condition & (df['task_finish_date'] > current_date)
+    
+    # ログ出力を追加
+    milestone_count = df[milestone_condition].shape[0]
+    logger.info(f"マイルストーン条件に一致したタスク数: {milestone_count}")
+    
+    # 空の結果に対するフォールバック処理
+    result = df[milestone_condition].sort_values('task_finish_date')
+    if result.empty and not include_past:
+        logger.info("未来のマイルストーンが見つからないため、過去のマイルストーンも含めます")
+        return get_next_milestone(df, True)  # 再帰呼び出しで過去も含める
+    
+    return result
 
 
 def next_milestone_format(next_milestones, project_id: str) -> str:
     """
-    マイルストーン表示のフォーマット
+    マイルストーン表示のフォーマット（強化版）
     
     Args:
         next_milestones: マイルストーンのデータフレーム
@@ -641,16 +685,44 @@ def next_milestone_format(next_milestones, project_id: str) -> str:
         フォーマット済みのマイルストーン文字列
     """
     # 遅延インポート
-    global datetime
+    global datetime, pd
     if datetime is None:
         datetime = import_datetime()
-        
-    milestone = next_milestones[next_milestones['project_id'] == project_id]
+    if pd is None:
+        pd = import_pandas()
+    
+    # プロジェクトIDを文字列として扱う
+    project_id_str = str(project_id)
+    
+    # プロジェクトIDに一致するマイルストーンをフィルタリング
+    milestone = next_milestones[next_milestones['project_id'].astype(str) == project_id_str]
+    
     if len(milestone) == 0:
         return '-'
-    next_date = milestone.iloc[0]['task_finish_date']
-    days_until = (next_date - datetime.datetime.now()).days
-    return f"{milestone.iloc[0]['task_name']} ({days_until}日後)"
+    
+    try:
+        next_date = milestone.iloc[0]['task_finish_date']
+        task_name = milestone.iloc[0]['task_name']
+        
+        # 日付が有効かチェック
+        if pd.isna(next_date):
+            return f"{task_name} (日付なし)"
+        
+        # 現在日付との差を計算
+        current_date = datetime.datetime.now()
+        days_diff = (next_date - current_date).days
+        
+        # 日付に応じたメッセージ
+        if days_diff > 0:
+            return f"{task_name} ({days_diff}日後)"
+        elif days_diff < 0:
+            return f"{task_name} ({abs(days_diff)}日前)"
+        else:
+            return f"{task_name} (本日)"
+            
+    except Exception as e:
+        logger.error(f"マイルストーン表示フォーマットエラー: {e}")
+        return '-'
 
 
 @cache_result(ttl_seconds=30)  # 30秒キャッシュ
@@ -689,19 +761,20 @@ def get_recent_tasks(df, project_id: str) -> Dict[str, Any]:
             }
         
         # 遅延中タスク - boolean マスクを使用した高速フィルタリング
-        delay_mask = ((project_tasks['task_finish_date'] < current_date) & 
+        # 日付の比較方法を修正 - 日付部分のみを比較
+        delay_mask = ((project_tasks['task_finish_date'].dt.date < current_date.date()) & 
                      (project_tasks['task_status'] != '完了'))
         delayed_tasks = project_tasks[delay_mask].sort_values('task_finish_date')
         
         # 進行中タスク
         progress_mask = ((project_tasks['task_status'] != '完了') & 
-                        (project_tasks['task_start_date'] <= current_date) &
-                        (project_tasks['task_finish_date'] >= current_date))
+                        (project_tasks['task_start_date'].dt.date <= current_date.date()) &
+                        (project_tasks['task_finish_date'].dt.date >= current_date.date()))
         in_progress_tasks = project_tasks[progress_mask].sort_values('task_finish_date')
         
         # 次のタスク
         next_mask = ((project_tasks['task_status'] != '完了') & 
-                    (project_tasks['task_start_date'] > current_date))
+                    (project_tasks['task_start_date'].dt.date > current_date.date()))
         next_tasks = project_tasks[next_mask].sort_values('task_start_date')
         
         # 結果の作成 - 高速化のためにlen()を使用
@@ -711,7 +784,7 @@ def get_recent_tasks(df, project_id: str) -> Dict[str, Any]:
         if len(delayed_tasks) > 0:
             result['delayed'] = {
                 'name': delayed_tasks.iloc[0]['task_name'],
-                'days_delayed': (current_date - delayed_tasks.iloc[0]['task_finish_date']).days
+                'days_delayed': (current_date.date() - delayed_tasks.iloc[0]['task_finish_date'].date()).days
             }
         else:
             result['delayed'] = None
@@ -720,7 +793,7 @@ def get_recent_tasks(df, project_id: str) -> Dict[str, Any]:
         if len(in_progress_tasks) > 0:
             result['in_progress'] = {
                 'name': in_progress_tasks.iloc[0]['task_name'],
-                'days_remaining': (in_progress_tasks.iloc[0]['task_finish_date'] - current_date).days
+                'days_remaining': (in_progress_tasks.iloc[0]['task_finish_date'].date() - current_date.date()).days
             }
         else:
             result['in_progress'] = None
@@ -729,7 +802,7 @@ def get_recent_tasks(df, project_id: str) -> Dict[str, Any]:
         if len(next_tasks) > 0:
             result['next_task'] = {
                 'name': next_tasks.iloc[0]['task_name'],
-                'days_until': (next_tasks.iloc[0]['task_start_date'] - current_date).days
+                'days_until': (next_tasks.iloc[0]['task_start_date'].date() - current_date.date()).days
             }
         else:
             result['next_task'] = None
@@ -738,7 +811,7 @@ def get_recent_tasks(df, project_id: str) -> Dict[str, Any]:
         if len(next_tasks) > 1:
             result['next_next_task'] = {
                 'name': next_tasks.iloc[1]['task_name'],
-                'days_until': (next_tasks.iloc[1]['task_start_date'] - current_date).days
+                'days_until': (next_tasks.iloc[1]['task_start_date'].date() - current_date.date()).days
             }
         else:
             result['next_next_task'] = None

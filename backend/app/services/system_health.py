@@ -19,9 +19,10 @@ initialization_state = {
     "start_time": time.time(),
     "components": {
         "server": False,
-        "database": False,
+        # 以下の未使用コンポーネントを削除
+        # "database": False,  # 使用されていないコンポーネント
+        # "numpy": False,     # 使用されていないコンポーネント
         "pandas": False,
-        "numpy": False,
         "async_loader": False
     },
     "details": {}
@@ -156,9 +157,9 @@ def reset_initialization_state() -> None:
             "start_time": time.time(),
             "components": {
                 "server": False,
-                "database": False,
+                # "database": False,  # 使用されていないコンポーネント
+                # "numpy": False,     # 使用されていないコンポーネント
                 "pandas": False,
-                "numpy": False,
                 "async_loader": False
             },
             "details": {}
