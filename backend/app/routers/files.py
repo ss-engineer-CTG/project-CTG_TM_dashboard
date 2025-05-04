@@ -7,6 +7,7 @@ import sys
 import logging
 import tempfile
 import shutil
+import importlib
 
 from app.models.schemas import FilePath, FileResponse
 from app.services.file_utils import validate_file_path, open_file_or_folder
@@ -56,7 +57,7 @@ async def get_default_path():
         else:
             return FileResponse(
                 success=False,
-                message="デフォルトファイルが見つかりません",
+                message="データファイルが見つかりません。ファイルを選択してください。",
                 path=path
             )
     except Exception as e:
@@ -163,47 +164,70 @@ async def select_file(initial_path: str = None):
         logger.error(f"ファイル選択中にエラーが発生: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"ファイル選択中にエラーが発生しました: {str(e)}")
 
-@router.post("/files/upload", response_model=FileResponse)
-async def upload_file(file: UploadFile = File(...)):
-    """
-    CSVファイルをアップロードし、一時ディレクトリに保存する
-    
-    Args:
-        file: アップロードされたファイル
+# 条件付きでファイルアップロード機能を定義
+# python-multipartをダイナミックにチェック
+_has_multipart = False
+try:
+    importlib.import_module('multipart')
+    _has_multipart = True
+except ImportError:
+    logger.warning("python-multipart not installed, file upload functionality will be disabled")
+
+# python-multipartがインストールされている場合のみ、ファイルアップロード機能を定義
+if _has_multipart:
+    @router.post("/files/upload", response_model=FileResponse)
+    async def upload_file(file: UploadFile = File(...)):
+        """
+        CSVファイルをアップロードし、一時ディレクトリに保存する
         
-    Returns:
-        保存されたファイルパス
-    """
-    try:
-        logger.info(f"ファイルアップロード: {file.filename}")
-        
-        # ファイル形式確認
-        if not file.filename.endswith('.csv'):
+        Args:
+            file: アップロードされたファイル
+            
+        Returns:
+            保存されたファイルパス
+        """
+        try:
+            logger.info(f"ファイルアップロード: {file.filename}")
+            
+            # ファイル形式確認
+            if not file.filename.endswith('.csv'):
+                return FileResponse(
+                    success=False,
+                    message="CSVファイルのみアップロード可能です",
+                    path=None
+                )
+            
+            # 一時ディレクトリを作成
+            temp_dir = Path(tempfile.gettempdir()) / "project_dashboard"
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # ファイルパスを設定
+            file_path = temp_dir / file.filename
+            
+            # ファイル保存
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            
+            logger.info(f"ファイルを保存しました: {file_path}")
+            
             return FileResponse(
-                success=False,
-                message="CSVファイルのみアップロード可能です",
-                path=None
+                success=True,
+                message=f"ファイルがアップロードされました: {file.filename}",
+                path=str(file_path)
             )
-        
-        # 一時ディレクトリを作成
-        temp_dir = Path(tempfile.gettempdir()) / "project_dashboard"
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        # ファイルパスを設定
-        file_path = temp_dir / file.filename
-        
-        # ファイル保存
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        logger.info(f"ファイルを保存しました: {file_path}")
-        
+            
+        except Exception as e:
+            logger.error(f"ファイルアップロードエラー: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"ファイルアップロード中にエラーが発生しました: {str(e)}")
+else:
+    # python-multipartがない場合の代替エンドポイント
+    @router.post("/files/upload", response_model=FileResponse)
+    async def upload_file_disabled():
+        """
+        ファイルアップロード機能は無効化されています
+        """
         return FileResponse(
-            success=True,
-            message=f"ファイルがアップロードされました: {file.filename}",
-            path=str(file_path)
+            success=False,
+            message="ファイルアップロード機能は無効化されています。python-multipartをインストールしてください。",
+            path=None
         )
-        
-    except Exception as e:
-        logger.error(f"ファイルアップロードエラー: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"ファイルアップロード中にエラーが発生しました: {str(e)}")

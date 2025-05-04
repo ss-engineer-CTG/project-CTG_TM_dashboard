@@ -128,17 +128,6 @@ def resolve_dashboard_path() -> str:
     # 検索するパスのリスト
     search_paths = []
     
-    # 1. 環境変数から直接取得 - 最優先
-    if 'PMSUITE_DASHBOARD_FILE' in os.environ and os.environ['PMSUITE_DASHBOARD_FILE'].strip():
-        dashboard_path = os.environ['PMSUITE_DASHBOARD_FILE']
-        
-        # 絶対パスに変換して存在確認
-        dashboard_path = str(Path(dashboard_path).resolve())
-        if os.path.exists(dashboard_path):
-            _default_dashboard_path = dashboard_path
-            return dashboard_path
-        search_paths.append(dashboard_path)
-    
     # 2. アプリケーションバンドルパスを試行
     app_path = os.environ.get('APP_PATH', '')
     if app_path:
@@ -149,108 +138,47 @@ def resolve_dashboard_path() -> str:
             return path_str
         search_paths.append(str(bundle_path))
     
-    # 3. 現在の作業ディレクトリからの相対パスを試行
-    current_dir = Path(os.getcwd()).resolve()
+    # 3. ユーザーディレクトリの特定フォルダを検索（新しい実装）
+    # ユーザーのホームディレクトリ
+    home_dir = Path.home()
     
-    # 様々な候補を試す
-    fallback_paths = [
-        current_dir / "data" / "exports" / "dashboard.csv",
-        current_dir.parent / "data" / "exports" / "dashboard.csv",
-        current_dir / "ProjectManager" / "data" / "exports" / "dashboard.csv",
-        # このスクリプトからの相対パス
-        Path(__file__).resolve().parents[3] / "data" / "exports" / "dashboard.csv",
-        # さらに上の階層も試す
-        Path(__file__).resolve().parents[4] / "data" / "exports" / "dashboard.csv",
+    # 検索対象のフォルダ
+    user_folders = [
+        home_dir / "Documents",  # Windows/macOS
+        home_dir / "Desktop",    # Windows/macOS
+        home_dir / "Downloads",  # Windows/macOS
+        home_dir / "ドキュメント",  # 日本語Windows
+        home_dir / "デスクトップ",  # 日本語Windows
+        home_dir / "ダウンロード",  # 日本語Windows
+        home_dir / "文書",      # 日本語macOS
     ]
     
-    # アプリケーションディレクトリからの絶対パスも試す
-    search_paths.extend([str(path) for path in fallback_paths])
+    # フォルダが存在するか確認し、存在するフォルダのみに絞り込む
+    user_folders = [folder for folder in user_folders if folder.exists()]
     
-    # 重複を削除
-    search_paths = list(dict.fromkeys(filter(None, search_paths)))
+    # 各フォルダ内の "data/exports/dashboard.csv" を検索パスに追加
+    for folder in user_folders:
+        target_path = folder / "ProjectSuite" / "ProjectManager" / "data" / "exports" / "dashboard.csv"
+        search_paths.append(str(target_path))
+        
+        # ファイルが存在する場合は即座に返す（最適化）
+        if target_path.exists():
+            path_str = str(target_path)
+            _default_dashboard_path = path_str
+            logger.info(f"データファイルを発見: {path_str}")
+            return path_str
     
-    # 並列なしで高速にパスを検索（起動時最適化のため）
+    # 並列なしで高速にパスを検索
     for path in search_paths:
         if os.path.exists(path):
             _default_dashboard_path = path
             return path
     
-    # 4. サンプルデータを提供
-    logger.warning(f"ダッシュボードファイルが見つかりません。サンプルデータを返します。")
-    
-    # 遅延インポート
-    global pd, datetime
-    if pd is None:
-        pd = import_pandas()
-    if datetime is None:
-        datetime = import_datetime()
-    
-    # サンプルデータを生成してCSVを作成
-    try:
-        # 一時ディレクトリを作成して、そこにサンプルデータを保存
-        temp_dir = Path(os.environ.get('TEMP', '/tmp')) / "project_dashboard"
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        sample_path = temp_dir / "sample_dashboard.csv"
-        
-        # サンプルデータフレームを作成
-        sample_data = pd.DataFrame({
-            'project_id': ['P001', 'P001', 'P002', 'P002', 'P002'],
-            'project_name': ['サンプルプロジェクト1', 'サンプルプロジェクト1', 'サンプルプロジェクト2', 'サンプルプロジェクト2', 'サンプルプロジェクト2'],
-            'process': ['設計', '設計', '開発', '開発', '開発'],
-            'line': ['A', 'A', 'B', 'B', 'B'],
-            'task_id': ['T001', 'T002', 'T003', 'T004', 'T005'],
-            'task_name': ['要件定義', '基本設計', 'コーディング', 'テスト', 'リリース'],
-            'task_status': ['完了', '完了', '完了', '進行中', '未着手'],
-            'task_milestone': ['○', '', '○', '', '○'],
-            'task_start_date': [
-                (datetime.datetime.now() - datetime.timedelta(days=30)).strftime('%Y-%m-%d'),
-                (datetime.datetime.now() - datetime.timedelta(days=20)).strftime('%Y-%m-%d'),
-                (datetime.datetime.now() - datetime.timedelta(days=15)).strftime('%Y-%m-%d'),
-                (datetime.datetime.now() - datetime.timedelta(days=5)).strftime('%Y-%m-%d'),
-                (datetime.datetime.now() + datetime.timedelta(days=10)).strftime('%Y-%m-%d')
-            ],
-            'task_finish_date': [
-                (datetime.datetime.now() - datetime.timedelta(days=25)).strftime('%Y-%m-%d'),
-                (datetime.datetime.now() - datetime.timedelta(days=10)).strftime('%Y-%m-%d'),
-                (datetime.datetime.now() - datetime.timedelta(days=5)).strftime('%Y-%m-%d'),
-                (datetime.datetime.now() + datetime.timedelta(days=5)).strftime('%Y-%m-%d'),
-                (datetime.datetime.now() + datetime.timedelta(days=20)).strftime('%Y-%m-%d')
-            ],
-            'created_at': [
-                (datetime.datetime.now() - datetime.timedelta(days=40)).strftime('%Y-%m-%d'),
-                (datetime.datetime.now() - datetime.timedelta(days=40)).strftime('%Y-%m-%d'),
-                (datetime.datetime.now() - datetime.timedelta(days=30)).strftime('%Y-%m-%d'),
-                (datetime.datetime.now() - datetime.timedelta(days=30)).strftime('%Y-%m-%d'),
-                (datetime.datetime.now() - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
-            ]
-        })
-        
-        # サンプルCSVを保存
-        sample_data.to_csv(sample_path, index=False, encoding='utf-8-sig')
-        
-        # プロジェクトデータも作成
-        sample_projects = pd.DataFrame({
-            'project_id': ['P001', 'P002'],
-            'project_path': [str(temp_dir), str(temp_dir)],
-            'ganttchart_path': [str(sample_path), str(sample_path)]
-        })
-        
-        # プロジェクトCSVを保存
-        projects_path = temp_dir / "sample_projects.csv"
-        sample_projects.to_csv(projects_path, index=False, encoding='utf-8-sig')
-        
-        path_str = str(sample_path)
-        _default_dashboard_path = path_str
-        return path_str
-    except Exception as e:
-        logger.error(f"サンプルデータ作成エラー: {str(e)}")
-        traceback.print_exc()
-        
-        # 最終的には最初のパスを返す（存在しなくても）
-        path_str = str(fallback_paths[0])
-        _default_dashboard_path = path_str
-        return path_str
+    # 最終的には最初のパスを返す（存在しなくても）
+    fallback_path = str(user_folders[0] / "data" / "exports" / "dashboard.csv") if user_folders else str(home_dir / "data" / "exports" / "dashboard.csv")
+    logger.warning(f"データファイルが見つかりません。フォールバックパス: {fallback_path}")
+    _default_dashboard_path = fallback_path
+    return fallback_path
 
 
 @cache_result(ttl_seconds=60)  # 60秒キャッシュ
@@ -284,8 +212,6 @@ def load_and_process_data(dashboard_file_path: Optional[str] = None):
             
             # 代替パスを探索
             alt_paths = [
-                Path(os.environ.get("PMSUITE_DASHBOARD_FILE", "")),
-                Path(os.environ.get("PMSUITE_DASHBOARD_DATA_DIR", "")) / "dashboard.csv",
                 Path(os.getcwd()) / "data" / "exports" / "dashboard.csv",
                 Path(os.getcwd()).parent / "data" / "exports" / "dashboard.csv"
             ]
