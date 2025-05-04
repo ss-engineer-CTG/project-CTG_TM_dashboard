@@ -5,6 +5,7 @@
 - 進捗計算
 - 遅延検出
 - マイルストーン関連処理
+- 暗号化対応 (追加)
 """
 
 import os
@@ -27,6 +28,9 @@ from .async_loader import (
     lazy_import, import_pandas, import_numpy, import_datetime,
     run_in_threadpool, async_cache_result, register_init_task
 )
+
+# 暗号化ユーティリティを遅延インポート
+crypto_utils = None
 
 # 必要なモジュールを遅延インポート
 pd = None
@@ -56,13 +60,21 @@ _default_dashboard_path = None
 @register_init_task
 async def initialize_data_processing():
     """データ処理モジュールの初期化"""
-    global pd, datetime, concurrent, _default_dashboard_path
+    global pd, datetime, concurrent, _default_dashboard_path, crypto_utils
     
     # 必要なモジュールをバックグラウンドでインポート
     pd = import_pandas()
     datetime = import_datetime()
     # エラーの修正: concurrent.futures は単独のモジュール
     concurrent = lazy_import("concurrent.futures")
+    
+    # 暗号化ユーティリティをインポート (追加)
+    try:
+        from .crypto_utils import get_crypto_instance
+        crypto_utils = get_crypto_instance()
+        logger.info("暗号化ユーティリティを初期化しました")
+    except ImportError:
+        logger.warning("暗号化ユーティリティをロードできませんでした")
     
     # デフォルトパスを非同期で解決
     _default_dashboard_path = await run_in_threadpool(resolve_dashboard_path)
@@ -137,6 +149,14 @@ def resolve_dashboard_path() -> str:
             _default_dashboard_path = path_str
             return path_str
         search_paths.append(str(bundle_path))
+        
+        # 暗号化ファイルを確認 (追加)
+        encrypted_bundle_path = Path(app_path) / "data" / "exports" / "dashboard.csv.enc"
+        if encrypted_bundle_path.exists():
+            path_str = str(encrypted_bundle_path)
+            _default_dashboard_path = path_str
+            return path_str
+        search_paths.append(str(encrypted_bundle_path))
     
     # 3. ユーザーディレクトリの特定フォルダを検索（新しい実装）
     # ユーザーのホームディレクトリ
@@ -158,6 +178,7 @@ def resolve_dashboard_path() -> str:
     
     # 各フォルダ内の "data/exports/dashboard.csv" を検索パスに追加
     for folder in user_folders:
+        # 通常のCSVファイル
         target_path = folder / "ProjectSuite" / "ProjectManager" / "data" / "exports" / "dashboard.csv"
         search_paths.append(str(target_path))
         
@@ -166,6 +187,17 @@ def resolve_dashboard_path() -> str:
             path_str = str(target_path)
             _default_dashboard_path = path_str
             logger.info(f"データファイルを発見: {path_str}")
+            return path_str
+            
+        # 暗号化ファイル (追加)
+        encrypted_target_path = folder / "ProjectSuite" / "ProjectManager" / "data" / "exports" / "dashboard.csv.enc"
+        search_paths.append(str(encrypted_target_path))
+        
+        # 暗号化ファイルが存在する場合は即座に返す (追加)
+        if encrypted_target_path.exists():
+            path_str = str(encrypted_target_path)
+            _default_dashboard_path = path_str
+            logger.info(f"暗号化データファイルを発見: {path_str}")
             return path_str
     
     # 並列なしで高速にパスを検索
@@ -180,6 +212,10 @@ def resolve_dashboard_path() -> str:
     _default_dashboard_path = fallback_path
     return fallback_path
 
+# ファイル拡張子チェック関数 (追加)
+def is_encrypted_file(file_path: str) -> bool:
+    """ファイルが暗号化されているかどうかをチェック"""
+    return file_path.endswith('.enc')
 
 @cache_result(ttl_seconds=60)  # 60秒キャッシュ
 def load_and_process_data(dashboard_file_path: Optional[str] = None):
@@ -194,7 +230,7 @@ def load_and_process_data(dashboard_file_path: Optional[str] = None):
         処理済みのデータフレーム
     """
     # 遅延インポート
-    global pd
+    global pd, crypto_utils
     if pd is None:
         pd = import_pandas()
     
@@ -206,29 +242,96 @@ def load_and_process_data(dashboard_file_path: Optional[str] = None):
         # パス解決の二重確認
         dashboard_path = Path(dashboard_file_path).resolve()
         
-        # ファイル存在確認
+        # 暗号化ファイルのチェックと処理 (追加)
+        is_encrypted = is_encrypted_file(str(dashboard_path))
+        temp_decrypted_path = None
+        
+        if is_encrypted and crypto_utils:
+            try:
+                logger.info(f"暗号化されたファイルを検出: {dashboard_path}")
+                # 一時ファイルに復号化
+                temp_dir = Path(os.path.join(os.path.dirname(dashboard_path), ".temp"))
+                temp_dir.mkdir(exist_ok=True)
+                temp_decrypted_path = os.path.join(temp_dir, os.path.basename(dashboard_path)[:-4])
+                
+                crypto_utils.decrypt_file(dashboard_path, temp_decrypted_path)
+                logger.info(f"ファイルを復号化しました: {temp_decrypted_path}")
+                
+                # 復号化したファイルを使用
+                dashboard_path = Path(temp_decrypted_path)
+            except Exception as e:
+                logger.error(f"ファイルの復号化に失敗しました: {e}")
+                # 復号化に失敗した場合は元のパスを使用
+        
+        # ファイル存在確認と詳細ログ
         if not dashboard_path.exists():
             logger.error(f"ファイルが見つかりません: {dashboard_path}")
             
-            # 代替パスを探索
-            alt_paths = [
-                Path(os.getcwd()) / "data" / "exports" / "dashboard.csv",
-                Path(os.getcwd()).parent / "data" / "exports" / "dashboard.csv"
-            ]
+            # 暗号化バージョンを確認 (追加)
+            encrypted_path = Path(str(dashboard_path) + '.enc')
+            if encrypted_path.exists() and crypto_utils:
+                try:
+                    logger.info(f"暗号化バージョンを検出: {encrypted_path}")
+                    # 一時ファイルに復号化
+                    temp_dir = Path(os.path.join(os.path.dirname(dashboard_path), ".temp"))
+                    temp_dir.mkdir(exist_ok=True)
+                    temp_decrypted_path = os.path.join(temp_dir, os.path.basename(dashboard_path))
+                    
+                    crypto_utils.decrypt_file(encrypted_path, temp_decrypted_path)
+                    logger.info(f"ファイルを復号化しました: {temp_decrypted_path}")
+                    
+                    # 復号化したファイルを使用
+                    dashboard_path = Path(temp_decrypted_path)
+                except Exception as e:
+                    logger.error(f"暗号化ファイルの復号化に失敗しました: {e}")
             
-            for alt_path in alt_paths:
-                if alt_path.exists():
-                    logger.info(f"代替パスが見つかりました: {alt_path}")
-                    dashboard_path = alt_path
-                    break
-            else:
-                # 代替パスが見つからなかった場合
-                error_df = pd.DataFrame({
-                    "error_message": [f"データファイルが見つかりません: {dashboard_path}"],
-                    "additional_info": ["以下のパスも確認しましたが見つかりませんでした:"] + 
-                                      [f"- {p}" for p in alt_paths if str(p) != "."]
-                })
-                return error_df
+            # 代替パスを探索
+            if not dashboard_path.exists():
+                alt_paths = [
+                    Path(os.getcwd()) / "data" / "exports" / "dashboard.csv",
+                    Path(os.getcwd()).parent / "data" / "exports" / "dashboard.csv",
+                    Path(os.getcwd()) / "data" / "exports" / "dashboard.csv.enc", # 暗号化ファイル (追加)
+                    Path(os.getcwd()).parent / "data" / "exports" / "dashboard.csv.enc" # 暗号化ファイル (追加)
+                ]
+                
+                for alt_path in alt_paths:
+                    if alt_path.exists():
+                        logger.info(f"代替パスが見つかりました: {alt_path}")
+                        dashboard_path = alt_path
+                        
+                        # 暗号化ファイルの場合は復号化 (追加)
+                        if is_encrypted_file(str(alt_path)) and crypto_utils:
+                            try:
+                                # 一時ファイルに復号化
+                                temp_dir = Path(os.path.join(os.path.dirname(alt_path), ".temp"))
+                                temp_dir.mkdir(exist_ok=True)
+                                temp_decrypted_path = os.path.join(temp_dir, os.path.basename(alt_path)[:-4])
+                                
+                                crypto_utils.decrypt_file(alt_path, temp_decrypted_path)
+                                logger.info(f"代替ファイルを復号化しました: {temp_decrypted_path}")
+                                
+                                # 復号化したファイルを使用
+                                dashboard_path = Path(temp_decrypted_path)
+                            except Exception as e:
+                                logger.error(f"代替ファイルの復号化に失敗しました: {e}")
+                        
+                        break
+                else:
+                    # 代替パスが見つからなかった場合
+                    error_df = pd.DataFrame({
+                        "error_message": [f"データファイルが見つかりません: {dashboard_path}"],
+                        "additional_info": ["以下のパスも確認しましたが見つかりませんでした:"] + 
+                                        [f"- {p}" for p in alt_paths if str(p) != "."]
+                    })
+                    
+                    # 一時ファイルのクリーンアップ (追加)
+                    if temp_decrypted_path and os.path.exists(temp_decrypted_path):
+                        try:
+                            os.remove(temp_decrypted_path)
+                        except:
+                            pass
+                    
+                    return error_df
         
         # 効率的なエンコーディング検出と読み込み
         df = None
@@ -245,6 +348,14 @@ def load_and_process_data(dashboard_file_path: Optional[str] = None):
         
         if df is None:
             logger.error(f"すべてのエンコーディングで読み込みに失敗: {encoding_errors}")
+            
+            # 一時ファイルのクリーンアップ (追加)
+            if temp_decrypted_path and os.path.exists(temp_decrypted_path):
+                try:
+                    os.remove(temp_decrypted_path)
+                except:
+                    pass
+            
             return pd.DataFrame({
                 "error": ["CSVファイルの読み込みに失敗しました。以下のエンコーディングを試しましたが失敗しました:"],
                 "details": ["\n".join(encoding_errors)]
@@ -252,6 +363,24 @@ def load_and_process_data(dashboard_file_path: Optional[str] = None):
         
         # 成功したらプロジェクトデータも読み込み
         projects_file_path = str(dashboard_path).replace('dashboard.csv', 'projects.csv')
+        encrypted_projects_file_path = projects_file_path + '.enc'
+        
+        # 暗号化プロジェクトファイルの確認 (追加)
+        if os.path.exists(encrypted_projects_file_path) and crypto_utils:
+            try:
+                logger.info(f"暗号化されたプロジェクトファイルを検出: {encrypted_projects_file_path}")
+                # 一時ファイルに復号化
+                temp_dir = Path(os.path.join(os.path.dirname(dashboard_path), ".temp"))
+                temp_dir.mkdir(exist_ok=True)
+                temp_projects_path = os.path.join(temp_dir, "projects.csv")
+                
+                crypto_utils.decrypt_file(encrypted_projects_file_path, temp_projects_path)
+                logger.info(f"プロジェクトファイルを復号化しました: {temp_projects_path}")
+                
+                # 復号化したファイルを使用
+                projects_file_path = temp_projects_path
+            except Exception as e:
+                logger.error(f"プロジェクトファイルの復号化に失敗しました: {e}")
         
         if os.path.exists(projects_file_path):
             # プロジェクトデータの読み込み
@@ -278,10 +407,25 @@ def load_and_process_data(dashboard_file_path: Optional[str] = None):
                 except Exception as e:
                     logger.warning(f"{col}列の日付変換エラー: {e}")
         
+        # 一時ファイルのクリーンアップ (追加)
+        if temp_decrypted_path and os.path.exists(temp_decrypted_path):
+            try:
+                os.remove(temp_decrypted_path)
+            except:
+                pass
+        
         return df
         
     except Exception as e:
         logger.error(f"データ読み込み総合エラー: {e}")
+        
+        # 一時ファイルのクリーンアップ (追加)
+        if temp_decrypted_path and os.path.exists(temp_decrypted_path):
+            try:
+                os.remove(temp_decrypted_path)
+            except:
+                pass
+        
         return pd.DataFrame({"error": [f"データ読み込み処理中にエラーが発生しました: {str(e)}"]})
 
 
@@ -979,6 +1123,17 @@ def clear_cache() -> int:
     cache_size = len(_data_cache)
     _data_cache = {}
     logger.info(f"キャッシュをクリア: {cache_size}項目を削除しました")
+    
+    # 一時ファイルのクリーンアップ (追加)
+    try:
+        temp_dir = Path(os.path.join(os.getcwd(), "data", "exports", ".temp"))
+        if temp_dir.exists():
+            for temp_file in temp_dir.glob("*"):
+                os.remove(temp_file)
+            logger.info("一時復号化ファイルをクリーンアップしました")
+    except Exception as e:
+        logger.warning(f"一時ファイルのクリーンアップ中にエラーが発生しました: {e}")
+    
     return cache_size
 
 

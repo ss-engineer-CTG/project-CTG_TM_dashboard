@@ -16,6 +16,7 @@ class ProcessManager {
     this.isRestartInProgress = false;
     this.pidFilePath = path.join(os.tmpdir(), 'project_dashboard_pids.txt');
     this.portFilePath = path.join(os.tmpdir(), 'project_dashboard_port.txt');
+    this.isBinaryMode = false; // バイナリモードフラグ (追加)
   }
   
   /**
@@ -28,6 +29,9 @@ class ProcessManager {
    */
   startProcess(pythonPath, scriptPath, port, options = {}) {
     console.log(`バックエンドサーバーを起動します: ${pythonPath} ${scriptPath} ${port}`);
+    
+    // バイナリモードを無効化
+    this.isBinaryMode = false;
     
     // 環境変数を設定
     const envVars = {
@@ -50,6 +54,65 @@ class ProcessManager {
       stdio: 'pipe',
       detached: false,
       cwd: path.dirname(path.dirname(scriptPath)),
+      env: envVars
+    });
+    
+    // PIDトラッキング用のファイルに書き込み
+    if (this.currentProcess && this.currentProcess.pid) {
+      try {
+        fs.writeFileSync(this.pidFilePath, this.currentProcess.pid.toString());
+        console.log(`プロセスID ${this.currentProcess.pid} をトラッキングファイルに保存しました`);
+      } catch (err) {
+        console.warn('PIDトラッキングファイルの書き込みに失敗:', err.message);
+      }
+    }
+    
+    // ポート情報を保存
+    try {
+      fs.writeFileSync(this.portFilePath, port.toString());
+      console.log(`ポート ${port} を一時ファイルに保存しました`);
+    } catch (err) {
+      console.warn('ポート情報ファイルの保存に失敗:', err.message);
+    }
+    
+    // UTF-8エンコーディングを設定
+    this.currentProcess.stdout.setEncoding('utf-8');
+    this.currentProcess.stderr.setEncoding('utf-8');
+    
+    return this.currentProcess;
+  }
+  
+  /**
+   * バックエンドバイナリを起動します (追加)
+   * @param {string} binaryPath - バイナリファイルのパス
+   * @param {number} port - 使用するポート番号
+   * @param {Object} options - 追加のオプション
+   * @returns {ChildProcess} - 起動したプロセス
+   */
+  startBinaryProcess(binaryPath, port, options = {}) {
+    console.log(`バイナリバックエンドを起動します: ${binaryPath} ${port}`);
+    
+    // バイナリモードを有効化
+    this.isBinaryMode = true;
+    
+    // 環境変数を設定
+    const envVars = {
+      ...process.env,
+      USE_ELECTRON_DIALOG: "true",
+      ELECTRON_PORT: port.toString(),
+      API_PORT: port.toString(),
+      STREAMLINED_LOGGING: "1",
+      DEBUG: options.debug ? "1" : "0",
+      CRYPTO_KEY: process.env.CRYPTO_KEY || "THIS_IS_A_DEVELOPMENT_KEY_REPLACE_IN_PRODUCTION"
+    };
+    
+    // コマンドライン引数
+    const args = [port.toString()];
+    
+    // プロセスを起動
+    this.currentProcess = spawn(binaryPath, args, {
+      stdio: 'pipe',
+      detached: false,
       env: envVars
     });
     
@@ -145,6 +208,7 @@ class ProcessManager {
       }
       
       this.currentProcess = null;
+      this.isBinaryMode = false; // バイナリモードをリセット
       return true;
     } catch (error) {
       console.error('プロセス終了エラー:', error);
@@ -179,13 +243,25 @@ class ProcessManager {
         console.warn('PIDトラッキングファイルの読み込みに失敗:', err.message);
       }
       
+      // バックエンドプロセスの名前パターン定義（追加）
+      const processNamePatterns = [
+        'python',
+        'project-dashboard-backend',
+        'project-dashboard-backend.exe'
+      ];
+      
       // findProcessによるポート占有プロセスの検出
       const ports = [8000, 8080, 8888, 8081, 8001, 3001, 5000];
       for (const port of ports) {
         try {
           const processes = await findProcess('port', port);
           for (const proc of processes) {
-            if (proc.name && proc.name.toLowerCase().includes('python') && proc.pid) {
+            // プロセス名がパターンに一致するか確認（追加）
+            const matchesPattern = processNamePatterns.some(pattern => 
+              proc.name && proc.name.toLowerCase().includes(pattern.toLowerCase())
+            );
+            
+            if (matchesPattern && proc.pid) {
               if (!activePids.includes(proc.pid)) {
                 activePids.push(proc.pid);
               }
@@ -251,6 +327,14 @@ class ProcessManager {
     } finally {
       this.isCleanupInProgress = false;
     }
+  }
+  
+  /**
+   * 現在のプロセスがバイナリモードかどうかを取得 (追加)
+   * @returns {boolean} - バイナリモードならtrue
+   */
+  isBinaryBackend() {
+    return this.isBinaryMode;
   }
 }
 

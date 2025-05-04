@@ -228,6 +228,118 @@ async function startFastApi() {
       }
     }
 
+    // バックエンドバイナリの検索 (追加)
+    const platformExtension = process.platform === 'win32' ? '.exe' : '';
+    const binaryName = `project-dashboard-backend${platformExtension}`;
+    
+    // 可能性のあるバイナリパスを検索
+    const possibleBinaryPaths = [
+      path.join(app.getAppPath(), binaryName),
+      path.join(process.resourcesPath, 'app.asar.unpacked', binaryName),
+      path.join(process.resourcesPath, binaryName),
+      path.join(app.getPath('exe'), '..', binaryName),
+      path.join(__dirname, '..', binaryName),
+    ];
+    
+    let backendBinaryPath = null;
+    
+    // バイナリの存在を確認
+    for (const binPath of possibleBinaryPaths) {
+      if (fs.existsSync(binPath)) {
+        console.log(`バックエンドバイナリを検出: ${binPath}`);
+        backendBinaryPath = binPath;
+        break;
+      }
+    }
+    
+    // バイナリが見つかった場合はそれを使用 (追加)
+    if (backendBinaryPath) {
+      console.log(`バイナリバックエンドを使用します: ${backendBinaryPath}`);
+      
+      // バイナリの実行権限を確認/設定 (Unixのみ)
+      if (process.platform !== 'win32') {
+        try {
+          fs.chmodSync(backendBinaryPath, 0o755); // -rwxr-xr-x
+          console.log(`実行権限を設定しました: ${backendBinaryPath}`);
+        } catch (err) {
+          console.warn(`実行権限の設定に失敗: ${err.message}`);
+        }
+      }
+      
+      // プロセスを起動
+      fastApiProcess = processManager.startBinaryProcess(
+        backendBinaryPath, 
+        selectedPort,
+        { debug: config.debug }
+      );
+      
+      // プロミスを返して接続が確立されるのを待つ
+      return new Promise((resolve, reject) => {
+        // タイムアウト設定 - 最長1分
+        const timeoutId = setTimeout(() => {
+          reject(new Error('バックエンドサーバーの起動がタイムアウトしました'));
+        }, 60000);
+        
+        // 接続が確立するのを待つ
+        const waitForConnection = async () => {
+          try {
+            // バイナリバックエンドの準備確認
+            const isReady = await connectionManager.waitForReadiness(selectedPort, true);
+            
+            clearTimeout(timeoutId);
+            
+            if (isReady) {
+              console.log(`バイナリバックエンドが起動完了しました (ポート: ${selectedPort})`);
+              resolve(selectedPort);
+            } else {
+              reject(new Error('バイナリバックエンドの準備確認に失敗しました'));
+            }
+          } catch (error) {
+            clearTimeout(timeoutId);
+            reject(error);
+          }
+        };
+        
+        // 標準出力・エラーの監視
+        fastApiProcess.stdout.on('data', (data) => {
+          const output = data.toString();
+          console.log(`バックエンドログ: ${output.trim()}`);
+        });
+        
+        fastApiProcess.stderr.on('data', (data) => {
+          const output = data.toString();
+          console.error(`バックエンドエラー: ${output.trim()}`);
+        });
+        
+        // エラーハンドリング
+        fastApiProcess.on('error', (err) => {
+          clearTimeout(timeoutId);
+          reject(new Error(`バックエンドの起動に失敗しました: ${err.message}`));
+        });
+        
+        // プロセス終了時のハンドリング
+        fastApiProcess.on('close', (code) => {
+          // サーバーが正常に起動した後に終了した場合
+          if (connectionManager.state === 'ready') {
+            console.warn(`バックエンドプロセスが予期せず終了しました。終了コード: ${code}`);
+            return;
+          }
+          
+          // サーバーが起動前に終了した場合
+          clearTimeout(timeoutId);
+          reject(new Error(`バックエンドの起動に失敗しました。終了コード: ${code}`));
+          
+          fastApiProcess = null;
+        });
+        
+        // 接続確立を開始
+        waitForConnection();
+      });
+    }
+
+    // バイナリが見つからない場合は、従来のPythonスクリプト起動に戻る
+    console.log('バックエンドバイナリが見つからないため、Pythonスクリプトを使用します');
+
     // 一貫したパス解決を使用
     const backendDir = getResourcePath('backend');
     const scriptPath = path.join(backendDir, 'app', 'main.py');

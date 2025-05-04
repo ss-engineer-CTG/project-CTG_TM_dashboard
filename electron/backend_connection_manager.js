@@ -20,6 +20,7 @@ class BackendConnectionManager extends EventEmitter {
     this.connectionTimeout = 60000; // 60秒のタイムアウト
     this.readinessProgress = 0;
     this.components = {};
+    this.isBinaryBackend = false; // バイナリバックエンドフラグ（追加）
     
     // 状態変更時のログ出力
     this.on('stateChange', (newState, oldState) => {
@@ -30,10 +31,12 @@ class BackendConnectionManager extends EventEmitter {
   /**
    * バックエンドの準備が完了するまで待機します
    * @param {number} port - 使用するポート番号
+   * @param {boolean} isBinary - バイナリバックエンドかどうか（追加）
    * @returns {Promise<boolean>} - 準備完了ならtrue、失敗ならfalse
    */
-  async waitForReadiness(port) {
+  async waitForReadiness(port, isBinary = false) {
     this.port = port;
+    this.isBinaryBackend = isBinary; // バイナリフラグを設定（追加）
     
     if (this.state === 'ready') return true;
     
@@ -70,51 +73,79 @@ class BackendConnectionManager extends EventEmitter {
    * @param {NodeJS.Timeout} timeoutId - タイムアウトID
    */
   startReadinessCheck(resolvePromise, timeoutId) {
+    // バイナリバックエンドの場合はヘルスチェックエンドポイントを確認（追加）
+    const checkEndpoint = this.isBinaryBackend 
+      ? '/api/health'    // バイナリバックエンドの場合は基本的なヘルスチェック
+      : '/api/system/readiness';  // FastAPIの場合は詳細なreadiness情報
+    
+    console.log(`バックエンド準備確認に使用するエンドポイント: ${checkEndpoint}`);
+    
     // 段階的なヘルスチェックの実装
     const checkHealth = async () => {
       try {
-        // 特殊な「本当に準備完了か」エンドポイントをチェック
+        // 準備状態チェックエンドポイントを呼び出し
         const response = await axios.get(
-          `http://127.0.0.1:${this.port}/api/system/readiness`,
+          `http://127.0.0.1:${this.port}${checkEndpoint}`,
           { 
             timeout: 2000 + (this.retryCount * 500), // 徐々に長いタイムアウト
             headers: { 'Accept': 'application/json' }
           }
         );
         
-        // 進捗情報を更新
-        this.readinessProgress = response.data.progress || 0;
-        this.components = response.data.components || {};
-        
-        // 完全に準備完了
-        if (response.status === 200 && response.data.readiness === 'complete') {
-          this.setState('ready');
-          clearTimeout(timeoutId);
-          console.log('バックエンドサーバーが完全に初期化されました');
+        // バイナリバックエンドの場合はシンプルな応答を想定（追加）
+        if (this.isBinaryBackend) {
+          if (response.status === 200) {
+            this.setState('ready');
+            clearTimeout(timeoutId);
+            console.log('バイナリバックエンドが応答しました - 準備完了');
+            
+            // メタデータ設定
+            this.readinessProgress = 100;
+            this.components = { backend: true };
+            
+            // 接続成功情報をファイルに保存
+            this.saveSuccessfulConnection();
+            
+            resolvePromise(true);
+            return;
+          }
+        } 
+        // 通常のFastAPI readiness応答処理
+        else {
+          // 進捗情報を更新
+          this.readinessProgress = response.data.progress || 0;
+          this.components = response.data.components || {};
           
-          // 接続成功情報をファイルに保存
-          this.saveSuccessfulConnection();
+          // 完全に準備完了
+          if (response.status === 200 && response.data.readiness === 'complete') {
+            this.setState('ready');
+            clearTimeout(timeoutId);
+            console.log('バックエンドサーバーが完全に初期化されました');
+            
+            // 接続成功情報をファイルに保存
+            this.saveSuccessfulConnection();
+            
+            resolvePromise(true);
+            return;
+          }
           
-          resolvePromise(true);
-          return;
-        }
-        
-        // 部分的に準備ができている場合
-        if (response.status === 200 && 
-            (response.data.readiness === 'partial' || response.data.readiness === 'initializing')) {
-          console.log(`バックエンド初期化中: ${response.data.progress}% 完了`);
-          this.emit('progress', response.data.progress, response.data.components);
-          this.scheduleNextCheck(checkHealth);
-          return;
-        }
-        
-        // エラー状態
-        if (response.status === 200 && response.data.readiness === 'error') {
-          this.setState('error');
-          clearTimeout(timeoutId);
-          console.error('バックエンドサーバーの初期化に失敗しました');
-          resolvePromise(false);
-          return;
+          // 部分的に準備ができている場合
+          if (response.status === 200 && 
+              (response.data.readiness === 'partial' || response.data.readiness === 'initializing')) {
+            console.log(`バックエンド初期化中: ${response.data.progress}% 完了`);
+            this.emit('progress', response.data.progress, response.data.components);
+            this.scheduleNextCheck(checkHealth);
+            return;
+          }
+          
+          // エラー状態
+          if (response.status === 200 && response.data.readiness === 'error') {
+            this.setState('error');
+            clearTimeout(timeoutId);
+            console.error('バックエンドサーバーの初期化に失敗しました');
+            resolvePromise(false);
+            return;
+          }
         }
         
         // 想定外のレスポンス
@@ -169,7 +200,8 @@ class BackendConnectionManager extends EventEmitter {
       const connectionInfo = {
         port: this.port,
         timestamp: Date.now(),
-        components: this.components
+        components: this.components,
+        isBinaryBackend: this.isBinaryBackend, // バイナリフラグを保存（追加）
       };
       
       // ファイルに書き込み
@@ -189,6 +221,7 @@ class BackendConnectionManager extends EventEmitter {
     this.retryCount = 0;
     this.readinessProgress = 0;
     this.components = {};
+    this.isBinaryBackend = false; // バイナリフラグをリセット（追加）
     this.emit('reset');
   }
   
@@ -200,7 +233,8 @@ class BackendConnectionManager extends EventEmitter {
       state: this.state,
       progress: this.readinessProgress,
       components: this.components,
-      retryCount: this.retryCount
+      retryCount: this.retryCount,
+      isBinaryBackend: this.isBinaryBackend, // バイナリフラグを追加（追加）
     };
   }
 }

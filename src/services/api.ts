@@ -153,6 +153,7 @@ class ElectronApiClient {
       timeout?: number;
       headers?: Record<string, string>;
       retries?: number;
+      useCrypto?: boolean;
     } = {}
   ): Promise<T> {
     // Electron環境でない場合はエラー
@@ -210,7 +211,7 @@ class ElectronApiClient {
   async get<T>(
     endpoint: string, 
     params?: Record<string, any>, 
-    options: { timeout?: number; headers?: Record<string, string> } = {}, 
+    options: { timeout?: number; headers?: Record<string, string>; useCrypto?: boolean } = {}, 
     cacheTTL: number = 0
   ): Promise<T> {
     // パスを正規化
@@ -249,7 +250,7 @@ class ElectronApiClient {
     endpoint: string, 
     data?: any, 
     params?: Record<string, any>, 
-    options: { timeout?: number; headers?: Record<string, string> } = {}
+    options: { timeout?: number; headers?: Record<string, string>; useCrypto?: boolean } = {}
   ): Promise<T> {
     // パスを正規化
     const normalizedEndpoint = ensureApiPath(endpoint);
@@ -263,7 +264,7 @@ class ElectronApiClient {
     endpoint: string, 
     data?: any, 
     params?: Record<string, any>, 
-    options: { timeout?: number; headers?: Record<string, string> } = {}
+    options: { timeout?: number; headers?: Record<string, string>; useCrypto?: boolean } = {}
   ): Promise<T> {
     // パスを正規化
     const normalizedEndpoint = ensureApiPath(endpoint);
@@ -276,7 +277,7 @@ class ElectronApiClient {
   async delete<T>(
     endpoint: string, 
     params?: Record<string, any>, 
-    options: { timeout?: number; headers?: Record<string, string> } = {}
+    options: { timeout?: number; headers?: Record<string, string>; useCrypto?: boolean } = {}
   ): Promise<T> {
     // パスを正規化
     const normalizedEndpoint = ensureApiPath(endpoint);
@@ -319,8 +320,8 @@ export const getInitialData = async (filePath: string): Promise<{
     try {
       // メトリクスとプロジェクトデータを並列に取得
       const [metricsData, projectsData] = await Promise.allSettled([
-        apiClient.get<DashboardMetrics>('/metrics', { file_path: filePath }, { timeout: 8000 }),
-        apiClient.get<Project[]>('/projects', { file_path: filePath }, { timeout: 8000 })
+        apiClient.get<DashboardMetrics>('/metrics', { file_path: filePath }, { timeout: 8000, useCrypto: true }),
+        apiClient.get<Project[]>('/projects', { file_path: filePath }, { timeout: 8000, useCrypto: true })
       ]);
       
       const result: any = {};
@@ -354,7 +355,7 @@ export const getProjects = async (filePath?: string): Promise<Project[]> => {
     const data = await apiClient.get<Project[]>(
       '/projects',
       { file_path: filePath },
-      { timeout: 8000 }
+      { timeout: 8000, useCrypto: true }
     );
     return data;
   }, `projects_${filePath || 'default'}`, 5000); // 5秒キャッシュ
@@ -368,7 +369,7 @@ export const getProject = async (projectId: string, filePath?: string): Promise<
     const data = await apiClient.get<Project>(
       `/projects/${projectId}`,
       { file_path: filePath },
-      { timeout: 8000 }
+      { timeout: 8000, useCrypto: true }
     );
     return data;
   }, `project_${projectId}_${filePath || 'default'}`, 5000); // 5秒キャッシュ
@@ -382,7 +383,7 @@ export const getRecentTasks = async (projectId: string, filePath?: string): Prom
     const data = await apiClient.get<RecentTasks>(
       `/projects/${projectId}/recent-tasks`,
       { file_path: filePath },
-      { timeout: 5000 }
+      { timeout: 5000, useCrypto: true }
     );
     return data;
   }, `recent_tasks_${projectId}_${filePath || 'default'}`, 10000); // 10秒キャッシュ
@@ -396,7 +397,7 @@ export const getMetrics = async (filePath?: string): Promise<DashboardMetrics> =
     const data = await apiClient.get<DashboardMetrics>(
       '/metrics',
       { file_path: filePath },
-      { timeout: 8000 }
+      { timeout: 8000, useCrypto: true }
     );
     return data;
   }, `metrics_${filePath || 'default'}`, 5000); // 5秒キャッシュ
@@ -577,7 +578,7 @@ export const getMilestones = async (filePath?: string, projectId?: string): Prom
     const data = await apiClient.get<Milestone[]>(
       '/milestones',
       params,
-      { timeout: 8000 }
+      { timeout: 8000, useCrypto: true }
     );
     return data;
   }, `milestones_${filePath || 'default'}_${projectId || 'all'}`, 5000); // 5秒キャッシュ
@@ -591,7 +592,7 @@ export const getMilestoneTimeline = async (filePath?: string): Promise<Milestone
     const data = await apiClient.get<MilestoneTimelineResponse>(
       '/milestones/timeline',
       { file_path: filePath },
-      { timeout: 8000 }
+      { timeout: 8000, useCrypto: true }
     );
     return data;
   }, `milestone_timeline_${filePath || 'default'}`, 5000); // 5秒キャッシュ
@@ -605,7 +606,7 @@ export const getMilestone = async (milestoneId: string, filePath?: string): Prom
     const data = await apiClient.get<Milestone>(
       `/milestones/${milestoneId}`,
       { file_path: filePath },
-      { timeout: 8000 }
+      { timeout: 8000, useCrypto: true }
     );
     return data;
   }, `milestone_${milestoneId}_${filePath || 'default'}`, 5000); // 5秒キャッシュ
@@ -620,7 +621,7 @@ export const createMilestone = async (milestone: Milestone, filePath?: string): 
       '/milestones',
       milestone,
       { file_path: filePath },
-      { timeout: 8000 }
+      { timeout: 8000, useCrypto: true }
     );
     return data;
   });
@@ -635,7 +636,7 @@ export const updateMilestone = async (milestoneId: string, milestone: Milestone,
       `/milestones/${milestoneId}`,
       milestone,
       { file_path: filePath },
-      { timeout: 8000 }
+      { timeout: 8000, useCrypto: true }
     );
     return data;
   });
@@ -649,7 +650,7 @@ export const deleteMilestone = async (milestoneId: string, filePath?: string): P
     const data = await apiClient.delete<{ success: boolean; message: string }>(
       `/milestones/${milestoneId}`,
       { file_path: filePath },
-      { timeout: 8000 }
+      { timeout: 8000, useCrypto: true }
     );
     return data;
   });

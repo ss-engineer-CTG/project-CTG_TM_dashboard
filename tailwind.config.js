@@ -91,4 +91,25 @@ module.exports = {
     },
   },
   plugins: [require("tailwindcss-animate")],
+  // 本番ビルドの最適化設定
+  future: {
+    hoverOnlyWhenSupported: true,
+  },
+  // 未使用のCSSを削除する設定を最適化
+  purge: {
+    enabled: process.env.NODE_ENV === 'production',
+    content: [
+      './src/**/*.{js,jsx,ts,tsx}',
+      './src/public/index.html',
+    ],
+    options: {
+      safelist: [
+        /^bg-/,
+        /^text-/,
+        /^border-/,
+        /^hover:/,
+        /^focus:/
+      ],
+    }
+  }
 }

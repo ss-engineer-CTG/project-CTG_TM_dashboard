@@ -104,7 +104,15 @@ const productionConfig = {
   devtool: 'source-map',
   plugins: [], // 明示的に空配列で初期化
   optimization: {
-    minimize: true
+    minimize: true,
+    // 本番用の最適化設定を追加
+    minimizer: [
+      '...',  // webpack 5のデフォルトminimizer（TerserPlugin）を使用
+    ],
+    moduleIds: 'deterministic',
+    innerGraph: true,
+    usedExports: true, // Tree Shakingを有効化
+    sideEffects: true, // sideEffectsフラグを尊重
   },
   performance: {
     hints: 'warning',

@@ -6,10 +6,10 @@
   "private": true,
   "main": "electron/main.js",
   "scripts": {
-    "clean": "rimraf build dist",
-    "build": "npm run clean && webpack --mode production",
-    "build:dev": "webpack --mode development",
-    "build:watch": "webpack --mode development --watch",
+    "clean": "node -e \"const fs=require('fs'); const path=require('path'); ['build', 'dist'].forEach(dir => { try { fs.rmSync(path.join(__dirname, dir), { recursive: true, force: true }); console.log(`Removed ${dir}`); } catch(e) { /* ignore */ } });\"",
+    "build": "npm run clean && npx webpack --mode production",
+    "build:dev": "node ./node_modules/webpack/bin/webpack.js --mode development",
+    "build:watch": "node ./node_modules/webpack/bin/webpack.js --mode development --watch",
     "electron": "electron .",
     "dev": "concurrently \"npm run build:watch\" \"npm run electron\"",
     "start": "npm run build:dev && electron .",
@@ -19,6 +19,10 @@
     "electron-pack:win:full": "npm run pack:prepare && electron-builder --win",
     "electron-pack:mac": "npm run pack:prepare && electron-builder --mac",
     "electron-pack:linux": "npm run pack:prepare && electron-builder --linux",
+    "encrypt-data": "node scripts/encrypt_data.js",
+    "build:all": "npm run clean && npm run build:backend && npm run build && npm run electron-pack",
+    "build:backend": "cd backend && .\\build_backend.bat",
+    "build:backend:unix": "cd backend && chmod +x ./build_backend.sh && ./build_backend.sh",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
@@ -27,6 +31,7 @@
     "@radix-ui/react-tooltip": "^1.0.7",
     "axios": "^1.6.2",
     "chart.js": "^4.4.0",
+    "chokidar": "^3.5.3",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.0.0",
     "date-fns": "^2.30.0",
@@ -42,8 +47,7 @@
     "tailwindcss-animate": "^1.0.7",
     "uuid": "^9.0.1",
     "wait-on": "^7.2.0",
-    "zod": "^3.22.2",
-    "chokidar": "^3.5.3"
+    "zod": "^3.22.2"
   },
   "devDependencies": {
     "@types/node": "^20.5.7",
@@ -53,7 +57,7 @@
     "autoprefixer": "^10.4.15",
     "concurrently": "^8.2.2",
     "css-loader": "^6.8.1",
-    "electron": "^28.3.3",
+    "electron": "28.3.3",
     "electron-builder": "^24.13.3",
     "electron-rebuild": "^3.2.0",
     "file-loader": "^6.2.0",
@@ -66,7 +70,7 @@
     "tailwindcss": "^3.3.3",
     "ts-loader": "^9.4.4",
     "typescript": "^5.1.6",
-    "webpack": "^5.88.2",
+    "webpack": "^5.99.7",
     "webpack-bundle-analyzer": "^4.9.0",
     "webpack-cli": "^5.1.4",
     "webpack-dev-server": "^4.15.1"
@@ -85,23 +89,17 @@
     ],
     "extraResources": [
       {
-        "from": "backend",
-        "to": "app.asar.unpacked/backend",
-        "filter": [
-          "**/*",
-          "!**/__pycache__/**",
-          "!**/*.pyc",
-          "!**/*.pyo",
-          "!**/.git/**",
-          "!**/.vscode/**",
-          "!**/.idea/**"
-        ]
+        "from": "project-dashboard-backend.exe",
+        "to": "app.asar.unpacked/project-dashboard-backend.exe"
       },
       {
         "from": "data",
         "to": "app.asar.unpacked/data",
         "filter": [
-          "**/*"
+          "**/*.enc",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/*.pyo"
         ]
       },
       {
@@ -151,7 +149,6 @@
       "node_modules/find-process",
       "node_modules/chokidar",
       "build",
-      "backend",
       "data"
     ]
   }
