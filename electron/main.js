@@ -12,6 +12,18 @@ const http = require('http');
 // 新しいモジュールをインポート
 const BackendConnectionManager = require('./backend_connection_manager');
 const ProcessManager = require('./process_manager');
+const { getLogger } = require('./logger'); // 新しいロガーをインポート
+const logger = getLogger({
+  logLevel: process.env.DEBUG === 'true' || isDev ? 'debug' : 'info'
+});
+
+// 既存のlog変数を新しいロガーを使うように修正
+const log = {
+  info: (msg) => logger.info(msg),
+  success: (msg) => logger.info(`✅ ${msg}`),
+  warn: (msg) => logger.warn(msg),
+  error: (msg) => logger.error(msg)
+};
 
 // 設定ベースのアプローチ - 環境による分岐を最小化
 const config = {
@@ -39,31 +51,31 @@ const getResourcePath = (relativePath) => {
     if (isPackaged) {
       // パッケージ化された環境では、リソースパスを app.asar.unpacked に明示的に指定
       rootPath = path.join(process.resourcesPath, 'app.asar.unpacked');
-      console.log(`パッケージ環境でのリソースパス基点: ${rootPath}`);
+      logger.debug(`パッケージ環境でのリソースパス基点: ${rootPath}`);
     } else {
       // 開発環境
       rootPath = path.join(__dirname, '..');
-      console.log(`開発環境でのリソースパス基点: ${rootPath}`);
+      logger.debug(`開発環境でのリソースパス基点: ${rootPath}`);
     }
     
     const resolvedPath = path.join(rootPath, relativePath);
     
     // 開発モードでのみログを出力
     if (isDev || process.env.DEBUG === 'true') {
-      console.log(`リソースパス解決: ${relativePath} -> ${resolvedPath}`);
+      logger.debug(`リソースパス解決: ${relativePath} -> ${resolvedPath}`);
       
       // パスが存在するか確認（デバッグ用）
       if (fs.existsSync(resolvedPath)) {
-        console.log(`パスが存在します: ${resolvedPath}`);
+        logger.debug(`パスが存在します: ${resolvedPath}`);
       } else {
-        console.warn(`パスが存在しません: ${resolvedPath}`);
+        logger.warn(`パスが存在しません: ${resolvedPath}`);
       }
     }
     
     return resolvedPath;
   } catch (e) {
     // エラー時はフォールバックパスを使用
-    console.warn('パス解決エラー:', e);
+    logger.warn(`パス解決エラー: ${e}`);
     return path.join(__dirname, '..', relativePath);
   }
 };
@@ -79,7 +91,7 @@ global.apiBaseUrl = `http://127.0.0.1:${config.apiPort}/api`;
 global.apiPort = parseInt(config.apiPort);
 
 // 初期化フェーズを記録
-console.log('Electron初期化開始');
+logger.info('Electron初期化開始');
 
 // プラットフォーム固有の最適化を設定
 const setupPlatformOptimizations = () => {
@@ -136,7 +148,7 @@ const isPortAvailable = async (port) => {
 
 // 改善されたポート検出関数
 const findAvailablePort = async (preferredPorts = [8000, 8080, 8888]) => {
-  console.log('使用可能なポートを検索しています...');
+  logger.info('使用可能なポートを検索しています...');
   
   // 一時ファイルからの読み込みを試みる
   let lastUsedPort = null;
@@ -146,19 +158,19 @@ const findAvailablePort = async (preferredPorts = [8000, 8080, 8888]) => {
       const savedPort = parseInt(fs.readFileSync(portFilePath, 'utf-8').trim());
       if (!isNaN(savedPort) && savedPort > 0) {
         lastUsedPort = savedPort;
-        console.log(`前回使用ポート ${lastUsedPort} を検出しました`);
+        logger.info(`前回使用ポート ${lastUsedPort} を検出しました`);
         
         // 前回ポートが使用可能かチェック
         if (await isPortAvailable(lastUsedPort)) {
-          console.log(`前回使用ポート ${lastUsedPort} が利用可能です`);
+          logger.info(`前回使用ポート ${lastUsedPort} が利用可能です`);
           return lastUsedPort;
         } else {
-          console.log(`前回使用ポート ${lastUsedPort} は使用中です`);
+          logger.info(`前回使用ポート ${lastUsedPort} は使用中です`);
         }
       }
     }
   } catch (err) {
-    console.warn('保存されたポート情報の読み込みに失敗:', err.message);
+    logger.warn(`保存されたポート情報の読み込みに失敗: ${err.message}`);
   }
   
   // 環境変数で指定されたポートを優先
@@ -166,17 +178,17 @@ const findAvailablePort = async (preferredPorts = [8000, 8080, 8888]) => {
   if (envPort && !isNaN(parseInt(envPort))) {
     const port = parseInt(envPort);
     if (await isPortAvailable(port)) {
-      console.log(`環境変数で指定されたポート ${port} が利用可能です`);
+      logger.info(`環境変数で指定されたポート ${port} が利用可能です`);
       return port;
     } else {
-      console.log(`環境変数で指定されたポート ${port} は使用中です`);
+      logger.info(`環境変数で指定されたポート ${port} は使用中です`);
     }
   }
   
   // 優先ポートのリストから使用可能なポートを探す
   for (const port of preferredPorts) {
     if (await isPortAvailable(port)) {
-      console.log(`ポート ${port} が利用可能です`);
+      logger.info(`ポート ${port} が利用可能です`);
       return port;
     }
   }
@@ -185,7 +197,7 @@ const findAvailablePort = async (preferredPorts = [8000, 8080, 8888]) => {
   let dynamicPort = 8000;
   while (dynamicPort < 9000) {
     if (await isPortAvailable(dynamicPort)) {
-      console.log(`動的に割り当てたポート ${dynamicPort} が利用可能です`);
+      logger.info(`動的に割り当てたポート ${dynamicPort} が利用可能です`);
       return dynamicPort;
     }
     dynamicPort += 1;
@@ -207,7 +219,7 @@ async function startFastApi() {
     
     // 使用可能なポートを検出
     const selectedPort = await findAvailablePort();
-    console.log(`バックエンドサーバー用にポート ${selectedPort} を選択しました`);
+    logger.info(`バックエンドサーバー用にポート ${selectedPort} を選択しました`);
     
     // グローバル変数に設定
     global.apiBaseUrl = `http://127.0.0.1:${selectedPort}/api`;
@@ -215,16 +227,16 @@ async function startFastApi() {
     
     // 外部バックエンドを使用する場合は、既存の接続をチェック
     if (useExternalBackend) {
-      console.log('外部バックエンドモードを使用: バックエンドの起動をスキップします');
+      logger.info('外部バックエンドモードを使用: バックエンドの起動をスキップします');
       
       // 接続確認
       const isReady = await connectionManager.waitForReadiness(selectedPort);
       if (isReady) {
-        console.log(`既存のバックエンドサーバーに接続成功（ポート: ${selectedPort}）`);
+        logger.info(`既存のバックエンドサーバーに接続成功（ポート: ${selectedPort}）`);
         return selectedPort;
       } else {
-        console.warn(`外部バックエンドへの接続に失敗しました（ポート: ${selectedPort}）`);
-        console.warn('内部バックエンド起動に切り替えます');
+        logger.warn(`外部バックエンドへの接続に失敗しました（ポート: ${selectedPort}）`);
+        logger.warn('内部バックエンド起動に切り替えます');
       }
     }
 
@@ -246,7 +258,7 @@ async function startFastApi() {
     // バイナリの存在を確認
     for (const binPath of possibleBinaryPaths) {
       if (fs.existsSync(binPath)) {
-        console.log(`バックエンドバイナリを検出: ${binPath}`);
+        logger.info(`バックエンドバイナリを検出: ${binPath}`);
         backendBinaryPath = binPath;
         break;
       }
@@ -254,15 +266,15 @@ async function startFastApi() {
     
     // バイナリが見つかった場合はそれを使用 (追加)
     if (backendBinaryPath) {
-      console.log(`バイナリバックエンドを使用します: ${backendBinaryPath}`);
+      logger.info(`バイナリバックエンドを使用します: ${backendBinaryPath}`);
       
       // バイナリの実行権限を確認/設定 (Unixのみ)
       if (process.platform !== 'win32') {
         try {
           fs.chmodSync(backendBinaryPath, 0o755); // -rwxr-xr-x
-          console.log(`実行権限を設定しました: ${backendBinaryPath}`);
+          logger.info(`実行権限を設定しました: ${backendBinaryPath}`);
         } catch (err) {
-          console.warn(`実行権限の設定に失敗: ${err.message}`);
+          logger.warn(`実行権限の設定に失敗: ${err.message}`);
         }
       }
       
@@ -289,7 +301,7 @@ async function startFastApi() {
             clearTimeout(timeoutId);
             
             if (isReady) {
-              console.log(`バイナリバックエンドが起動完了しました (ポート: ${selectedPort})`);
+              logger.info(`バイナリバックエンドが起動完了しました (ポート: ${selectedPort})`);
               resolve(selectedPort);
             } else {
               reject(new Error('バイナリバックエンドの準備確認に失敗しました'));
@@ -303,12 +315,12 @@ async function startFastApi() {
         // 標準出力・エラーの監視
         fastApiProcess.stdout.on('data', (data) => {
           const output = data.toString();
-          console.log(`バックエンドログ: ${output.trim()}`);
+          logger.info(`バックエンドログ: ${output.trim()}`);
         });
         
         fastApiProcess.stderr.on('data', (data) => {
           const output = data.toString();
-          console.error(`バックエンドエラー: ${output.trim()}`);
+          logger.error(`バックエンドエラー: ${output.trim()}`);
         });
         
         // エラーハンドリング
@@ -321,7 +333,7 @@ async function startFastApi() {
         fastApiProcess.on('close', (code) => {
           // サーバーが正常に起動した後に終了した場合
           if (connectionManager.state === 'ready') {
-            console.warn(`バックエンドプロセスが予期せず終了しました。終了コード: ${code}`);
+            logger.warn(`バックエンドプロセスが予期せず終了しました。終了コード: ${code}`);
             return;
           }
           
@@ -338,7 +350,7 @@ async function startFastApi() {
     }
 
     // バイナリが見つからない場合は、従来のPythonスクリプト起動に戻る
-    console.log('バックエンドバイナリが見つからないため、Pythonスクリプトを使用します');
+    logger.info('バックエンドバイナリが見つからないため、Pythonスクリプトを使用します');
 
     // 一貫したパス解決を使用
     const backendDir = getResourcePath('backend');
@@ -355,7 +367,7 @@ async function startFastApi() {
       } else {
         pythonPath = path.join(backendDir, 'venv', 'bin', 'python');
       }
-      console.log(`本番環境のPython実行パス: ${pythonPath}`);
+      logger.info(`本番環境のPython実行パス: ${pythonPath}`);
     } else {
       // 開発環境ではパスを検出
       const possiblePaths = [
@@ -372,13 +384,13 @@ async function startFastApi() {
             // コマンドの存在を確認
             require('child_process').execSync(`${p} --version`, {stdio: 'ignore'});
             pythonPath = p;
-            console.log(`開発環境のPython実行パス: ${pythonPath}`);
+            logger.info(`開発環境のPython実行パス: ${pythonPath}`);
             break;
           } else {
             // ファイルの存在を確認
             if (fs.existsSync(p)) {
               pythonPath = p;
-              console.log(`開発環境のPython実行パス: ${pythonPath}`);
+              logger.info(`開発環境のPython実行パス: ${pythonPath}`);
               break;
             }
           }
@@ -390,7 +402,7 @@ async function startFastApi() {
       // デフォルトのフォールバック
       if (!pythonPath) {
         pythonPath = 'python';
-        console.log(`Python実行パスが見つからないため、デフォルト "${pythonPath}" を使用します`);
+        logger.info(`Python実行パスが見つからないため、デフォルト "${pythonPath}" を使用します`);
       }
     }
 
@@ -426,7 +438,7 @@ async function startFastApi() {
       // 標準出力を監視
       fastApiProcess.stdout.on('data', async (data) => {
         const output = data.toString();
-        console.log(`バックエンドログ: ${output.trim()}`);
+        logger.info(`バックエンドログ: ${output.trim()}`);
         
         // 起動メッセージを検知したら準備確認を開始
         if (output.includes('Application startup complete') || 
@@ -450,16 +462,16 @@ async function startFastApi() {
             
             if (isReady) {
               // 準備完了
-              console.log(`バックエンドサーバーが起動完了しました (ポート: ${selectedPort})`);
+              logger.info(`バックエンドサーバーが起動完了しました (ポート: ${selectedPort})`);
               resolve(selectedPort);
             } else {
               // 準備失敗
-              console.error('バックエンドサーバーの準備確認に失敗しました');
+              logger.error('バックエンドサーバーの準備確認に失敗しました');
               reject(new Error('バックエンドサーバーの準備確認に失敗しました'));
             }
           } catch (error) {
             clearTimeout(timeoutId);
-            console.error('バックエンド準備確認エラー:', error);
+            logger.error('バックエンド準備確認エラー:', error);
             reject(error);
           }
         }
@@ -468,7 +480,7 @@ async function startFastApi() {
       // エラー出力の処理
       fastApiProcess.stderr.on('data', (data) => {
         const output = data.toString();
-        console.error(`バックエンドエラー: ${output.trim()}`);
+        logger.error(`バックエンドエラー: ${output.trim()}`);
       });
       
       // エラーハンドリング
@@ -481,7 +493,7 @@ async function startFastApi() {
       fastApiProcess.on('close', (code) => {
         // サーバーが正常に起動した後に終了した場合
         if (connectionManager.state === 'ready') {
-          console.warn(`バックエンドサーバープロセスが予期せず終了しました。終了コード: ${code}`);
+          logger.warn(`バックエンドサーバープロセスが予期せず終了しました。終了コード: ${code}`);
           return;
         }
         
@@ -493,7 +505,7 @@ async function startFastApi() {
       });
     });
   } catch (error) {
-    console.error('バックエンド起動エラー:', error);
+    logger.error('バックエンド起動エラー:', error);
     throw error;
   }
 }
@@ -502,7 +514,7 @@ async function startFastApi() {
 async function restartBackendServer() {
   // 冗長な再起動を防ぐためのセマフォ
   if (processManager.isRestartInProgress) {
-    console.log('再起動はすでに進行中です');
+    logger.info('再起動はすでに進行中です');
     return global.apiPort;
   }
   
@@ -516,7 +528,7 @@ async function restartBackendServer() {
     }
     
     // バックエンドサーバーを再起動
-    console.log('バックエンドサーバーを再起動します...');
+    logger.info('バックエンドサーバーを再起動します...');
     connectionManager.reset();
     
     const port = await startFastApi();
@@ -530,10 +542,10 @@ async function restartBackendServer() {
       });
     }
     
-    console.log(`バックエンドサーバーが再起動され、完全に準備ができました (ポート: ${port})`);
+    logger.info(`バックエンドサーバーが再起動され、完全に準備ができました (ポート: ${port})`);
     return port;
   } catch (error) {
-    console.error('バックエンドサーバー再起動エラー:', error);
+    logger.error('バックエンドサーバー再起動エラー:', error);
     throw error;
   } finally {
     processManager.isRestartInProgress = false;
@@ -630,7 +642,7 @@ function setupSecureFileProtocol() {
 function setupDevelopmentEnvironment() {
   // 本番環境では何もしない
   if (app.isPackaged || !config.watchFiles) {
-    console.log('本番環境またはファイル監視無効モードのため、ファイル監視はスキップします');
+    logger.info('本番環境またはファイル監視無効モードのため、ファイル監視はスキップします');
     return;
   }
 
@@ -639,11 +651,11 @@ function setupDevelopmentEnvironment() {
   try {
     chokidar = require('chokidar');
   } catch (err) {
-    console.warn('chokidarモジュールを読み込めませんでした。ファイル監視は無効化されます:', err.message);
+    logger.warn('chokidarモジュールを読み込めませんでした。ファイル監視は無効化されます:', err.message);
     return;
   }
 
-  console.log('ファイル監視を設定中...');
+  logger.info('ファイル監視を設定中...');
   
   // 開発環境のみでファイル監視を設定
   const watcher = chokidar.watch(getResourcePath('build'), {
@@ -653,9 +665,9 @@ function setupDevelopmentEnvironment() {
   
   // ファイル変更を検知したらメインウィンドウを再読み込み
   watcher.on('change', (changedPath) => {
-    console.log(`ファイルが変更されました: ${changedPath}`);
+    logger.info(`ファイルが変更されました: ${changedPath}`);
     if (mainWindow && !mainWindow.isDestroyed()) {
-      console.log('ウィンドウを再読み込みします...');
+      logger.info('ウィンドウを再読み込みします...');
       mainWindow.webContents.reloadIgnoringCache();
     }
   });
@@ -721,8 +733,8 @@ function createWindow() {
   const staticPath = getResourcePath('build/index.html');
   try {
     if (!fs.existsSync(staticPath)) {
-      console.error(`エラー: 静的ファイルが見つかりません: ${staticPath}`);
-      console.error('npm run build コマンドを実行して静的ファイルを生成してください');
+      logger.error(`エラー: 静的ファイルが見つかりません: ${staticPath}`);
+      logger.error('npm run build コマンドを実行して静的ファイルを生成してください');
       updateStartupProgress('静的ファイルが見つかりません。アプリを終了します...', 100);
       
       setTimeout(() => {
@@ -740,7 +752,7 @@ function createWindow() {
       return;
     }
   } catch (err) {
-    console.error('ファイル確認エラー:', err);
+    logger.error('ファイル確認エラー:', err);
   }
 
   // 静的ファイルをロード（開発/本番で同じパス）
@@ -790,7 +802,7 @@ function createWindow() {
         console.error('Electron環境変数の設定中にエラーが発生しました:', e);
       }
     `).catch(err => {
-      console.error('コード実行エラー:', err);
+      logger.error('コード実行エラー:', err);
     });
   });
 
@@ -822,12 +834,12 @@ const setupEnvironmentVariables = () => {
   process.env.SYSTEM_HEALTH_ENABLED = 'true';
   
   // コンソールに明示的に出力
-  console.log('環境変数設定:');
-  console.log(`- APP_ROOT: ${process.env.APP_ROOT}`);
-  console.log(`- BUILD_PATH: ${process.env.BUILD_PATH}`);
-  console.log(`- API_PORT: ${process.env.API_PORT}`);
-  console.log(`- OPTIMIZATION: ${process.env.OPTIMIZATION}`);
-  console.log(`- SYSTEM_HEALTH_ENABLED: ${process.env.SYSTEM_HEALTH_ENABLED}`);
+  logger.info('環境変数設定:');
+  logger.info(`- APP_ROOT: ${process.env.APP_ROOT}`);
+  logger.info(`- BUILD_PATH: ${process.env.BUILD_PATH}`);
+  logger.info(`- API_PORT: ${process.env.API_PORT}`);
+  logger.info(`- OPTIMIZATION: ${process.env.OPTIMIZATION}`);
+  logger.info(`- SYSTEM_HEALTH_ENABLED: ${process.env.SYSTEM_HEALTH_ENABLED}`);
 };
 
 // 起動シーケンス最適化 - 並列起動機能の強化
@@ -854,13 +866,13 @@ const optimizedStartup = async () => {
     
     // 6. 並列処理：バックエンド起動とメインウィンドウ初期化を並行 - 改良版
     updateStartupProgress('バックエンドサーバーを起動中...', 30);
-    console.log('バックエンドサーバーを起動しています...');
+    logger.info('バックエンドサーバーを起動しています...');
     
     // バックエンド起動とウィンドウ作成を並列実行
     const [port] = await Promise.all([
       // バックエンド起動
       startFastApi().catch(error => {
-        console.error('バックエンド起動エラー:', error);
+        logger.error('バックエンド起動エラー:', error);
         // エラーの場合もnullを返して処理を継続
         updateStartupProgress('バックエンドサーバー起動エラー - フロントエンドのみで続行', 40);
         return null;
@@ -877,9 +889,9 @@ const optimizedStartup = async () => {
     ]);
     
     if (port) {
-      console.log(`バックエンドサーバーが起動しました (ポート: ${port})`);
+      logger.info(`バックエンドサーバーが起動しました (ポート: ${port})`);
     } else {
-      console.warn('バックエンドサーバーの起動に失敗しましたが、フロントエンドの初期化を続行します');
+      logger.warn('バックエンドサーバーの起動に失敗しましたが、フロントエンドの初期化を続行します');
     }
     
     // 7. 開発環境セットアップ（本番環境では無効）
@@ -902,7 +914,7 @@ const optimizedStartup = async () => {
     updateStartupProgress('アプリケーションを起動中...', 90);
     
   } catch (error) {
-    console.error('Application startup error:', error);
+    logger.error('Application startup error:', error);
     
     if (splashWindow && !splashWindow.isDestroyed()) {
       updateStartupProgress('エラーが発生しました...', 100);
@@ -994,13 +1006,13 @@ ipcMain.handle('api:request', async (event, method, path, params, data, options)
       
       // 接続エラーの場合はバックエンドの再起動を試みる
       if (error.code === 'ECONNREFUSED' && retries === 1) {
-        console.log('バックエンド接続エラー、サーバーの再起動を試みます...');
+        logger.info('バックエンド接続エラー、サーバーの再起動を試みます...');
         try {
           await restartBackendServer();
           // 再起動後に少し待機
           await new Promise(resolve => setTimeout(resolve, 2000));
         } catch (restartError) {
-          console.error('バックエンド再起動エラー:', restartError);
+          logger.error('バックエンド再起動エラー:', restartError);
         }
       } else {
         // 他のエラーの場合は少し待ってから再試行
@@ -1047,7 +1059,7 @@ ipcMain.on('shortcut-select-file', () => {
 // アプリケーションの準備完了時に最適化された起動シーケンスを実行
 app.whenReady().then(() => {
   optimizedStartup().catch(err => {
-    console.error('致命的な起動エラー:', err);
+    logger.error('致命的な起動エラー:', err);
     app.quit();
   });
 });
@@ -1069,35 +1081,11 @@ app.on('window-all-closed', async () => {
   
   if (fastApiProcess !== null) {
     try {
-      console.log('FastAPIバックエンドの終了を試みています...');
+      logger.info('FastAPIバックエンドの終了を試みています...');
       
-      // まずAPIエンドポイントで正常終了を試みる
-      try {
-        const apiUrl = global.apiBaseUrl || `http://localhost:${config.apiPort}/api`;
-        await axios.post(`${apiUrl}/shutdown`, {
-          timeout: 2000
-        });
-        
-        // 少し待機してプロセスが終了するのを待つ
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      } catch (error) {
-        console.warn('APIシャットダウンエンドポイントに接続できませんでした:', error.message);
-      }
-      
-      // プロセスがまだ実行中の場合は終了
-      if (fastApiProcess && !fastApiProcess.killed) {
-        console.log('SIGTERMシグナルでプロセスを終了しています...');
-        fastApiProcess.kill('SIGTERM');
-        
-        // 終了を待つ
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        // まだ終了していない場合は強制終了
-        if (fastApiProcess && !fastApiProcess.killed) {
-          console.log('SIGKILLシグナルでプロセスを強制終了しています...');
-          fastApiProcess.kill('SIGKILL');
-        }
-      }
+      // ProcessManagerを使用してプロセスを終了 - ここを変更
+      await processManager.stopProcess(global.apiPort || config.apiPort);
+      fastApiProcess = null;
       
       // PIDトラッキングファイルをクリア
       try {
@@ -1106,10 +1094,36 @@ app.on('window-all-closed', async () => {
           fs.writeFileSync(pidFilePath, '');
         }
       } catch (err) {
-        console.warn('PIDトラッキングファイルのクリアに失敗:', err.message);
+        logger.warn('PIDトラッキングファイルのクリアに失敗:', err.message);
+      }
+      
+      // Windowsの場合はtaskkillで追加の終了確認 - 新しく追加
+      if (process.platform === 'win32') {
+        try {
+          // taskkillコマンドで残存プロセスを強制終了
+          require('child_process').execSync('taskkill /f /im project-dashboard-backend.exe', { 
+            stdio: 'ignore',
+            timeout: 3000
+          });
+          logger.info('taskkillでバックエンドプロセスの終了を確認しました');
+        } catch (err) {
+          // すでに終了している場合はエラーが発生するが無視
+          logger.warn('taskkillコマンド実行結果:', err.message);
+        }
       }
     } catch (err) {
-      console.error('FastAPIプロセス終了中のエラー:', err);
+      logger.error('FastAPIプロセス終了中のエラー:', err);
+      // エラーが発生した場合も最後の手段としてtaskkillを試行 - 新しく追加
+      if (process.platform === 'win32') {
+        try {
+          require('child_process').execSync('taskkill /f /im project-dashboard-backend.exe', {
+            stdio: 'ignore',
+            timeout: 3000
+          });
+        } catch (e) {
+          // エラーは無視
+        }
+      }
     }
   }
 
@@ -1182,7 +1196,7 @@ ipcMain.handle('fs:openPath', async (_, pathToOpen) => {
       };
     }
   } catch (error) {
-    console.error('ファイル/フォルダを開く際のエラー:', error);
+    logger.error('ファイル/フォルダを開く際のエラー:', error);
     return {
       success: false,
       message: `エラーが発生しました: ${error.message}`,
@@ -1317,7 +1331,7 @@ ipcMain.handle('dialog:openCSVFile', async (event, defaultPath) => {
       path: selectedFile 
     };
   } catch (error) {
-    console.error('ファイルダイアログエラー:', error);
+    logger.error('ファイルダイアログエラー:', error);
     return { 
       success: false, 
       message: `エラーが発生しました: ${error.message}`, 
@@ -1337,7 +1351,7 @@ ipcMain.handle('dialog:test', async () => {
     });
     return { success: true, result };
   } catch (error) {
-    console.error('Test dialog error:', error);
+    logger.error('Test dialog error:', error);
     return { success: false, error: error.message };
   }
 });

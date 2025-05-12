@@ -33,19 +33,16 @@ def record_stage(stage_name):
 # 最初のステージを記録
 record_stage('initialization_start')
 
+# バイナリモード検出 - PyInstallerでコンパイルされているか確認
+is_binary = getattr(sys, 'frozen', False)
+if is_binary:
+    print(f"バイナリモードで実行されています: {sys.executable}")
+
 # 最適化環境変数を確認
 is_optimized = os.environ.get('FASTAPI_STARTUP_OPTIMIZE') == '1'
 streamlined_logging = os.environ.get('STREAMLINED_LOGGING') == '1'
 debug_mode = os.environ.get('DEBUG') == '1'
 system_health_enabled = os.environ.get('SYSTEM_HEALTH_ENABLED') == '1'
-
-# ロギング設定 - デバッグモードでロギングレベルを変更
-log_level = logging.INFO if debug_mode else logging.WARNING if is_optimized else logging.INFO
-logging.basicConfig(
-    level=log_level,
-    format="%(levelname)s: %(message)s" if streamlined_logging else "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
 
 # モジュールのパスを追加
 current_dir = Path(__file__).parent
@@ -53,13 +50,41 @@ if str(current_dir.parent) not in sys.path:
     sys.path.insert(0, str(current_dir.parent))
 
 # 最小限のアプリ初期化情報をログ出力
-logger = logging.getLogger("api.startup")
-logger.info(f"バックエンドサーバー初期化中...")
+print(f"バックエンドサーバー初期化中...")
 
 # Python環境情報を出力
-logger.info(f"Python バージョン: {sys.version}")
-logger.info(f"実行パス: {sys.executable}")
-logger.info(f"作業ディレクトリ: {os.getcwd()}")
+print(f"Python バージョン: {sys.version}")
+print(f"実行パス: {sys.executable}")
+print(f"作業ディレクトリ: {os.getcwd()}")
+print(f"バイナリモード: {is_binary}")
+
+# カスタムロギング設定をインポート
+try:
+    from app.services.logging_utils import setup_logging
+    
+    # ロギングレベルを設定
+    log_level = logging.DEBUG if debug_mode else logging.WARNING if is_optimized else logging.INFO
+    
+    # カスタムロギング設定を適用
+    setup_logging(
+        log_level=log_level,
+        log_to_file=True,  # ファイルへのログ出力を有効化
+        app_name="project_dashboard_backend"
+    )
+    
+    record_stage('logging_setup_complete')
+except ImportError:
+    # ロギングユーティリティが見つからない場合は標準設定を使用
+    logging.basicConfig(
+        level=log_level,
+        format="%(levelname)s: %(message)s" if streamlined_logging else "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+    print("カスタムロギング設定の読み込みに失敗しました。標準設定を使用します。")
+
+# ロガーの取得
+logger = logging.getLogger("api.startup")
+logger.info(f"バックエンドサーバー初期化中...")
 
 # 早期モジュールインポート
 preloaded_modules = {}
@@ -356,25 +381,43 @@ if __name__ == "__main__":
     # アプリケーションの作成
     app = create_app(port)
     
-    # サーバーの起動設定を改善
-    log_config = None if is_optimized else uvicorn.config.LOGGING_CONFIG
-    
-    # デバッグモードの場合はリロードを有効化
-    reload_enabled = debug_mode and not is_optimized
-    
-    try:
-        uvicorn.run(
-            app, 
-            host="127.0.0.1",
-            port=port, 
-            reload=reload_enabled,
-            log_level="debug" if debug_mode else "warning" if is_optimized else "info",
-            access_log=debug_mode or not is_optimized,  # デバッグモードまたは非最適化モードではアクセスログを有効化
-            log_config=log_config,
-            timeout_keep_alive=60,
-            workers=1
-        )
-    except Exception as e:
-        logger.critical(f"アプリケーション起動中に重大なエラーが発生しました: {e}")
-        logger.critical(traceback.format_exc())
-        sys.exit(1)
+    # バイナリモードの場合は簡素化された設定を使用
+    if is_binary:
+        logger.info("バイナリモードで起動します - 簡素化された設定を使用")
+        try:
+            uvicorn.run(
+                app, 
+                host="127.0.0.1",
+                port=port,
+                log_level="info",
+                access_log=True,
+                timeout_keep_alive=60
+            )
+        except Exception as e:
+            logger.critical(f"バイナリモードでのサーバー起動エラー: {e}")
+            logger.critical(traceback.format_exc())
+            sys.exit(1)
+    else:
+        # 通常モードの場合は標準設定を使用
+        # サーバーの起動設定を改善
+        log_config = None if is_optimized else uvicorn.config.LOGGING_CONFIG
+        
+        # デバッグモードの場合はリロードを有効化
+        reload_enabled = debug_mode and not is_optimized
+        
+        try:
+            uvicorn.run(
+                app, 
+                host="127.0.0.1",
+                port=port, 
+                reload=reload_enabled,
+                log_level="debug" if debug_mode else "warning" if is_optimized else "info",
+                access_log=debug_mode or not is_optimized,  # デバッグモードまたは非最適化モードではアクセスログを有効化
+                log_config=log_config,
+                timeout_keep_alive=60,
+                workers=1
+            )
+        except Exception as e:
+            logger.critical(f"アプリケーション起動中に重大なエラーが発生しました: {e}")
+            logger.critical(traceback.format_exc())
+            sys.exit(1)

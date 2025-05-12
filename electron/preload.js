@@ -1,4 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
+const { getLogger } = require('./logger');
+const logger = getLogger();
 
 // 初期化パフォーマンス計測
 const preloadStartTime = Date.now();
@@ -244,6 +246,14 @@ contextBridge.exposeInMainWorld('electron', {
         ipcRenderer.removeListener('shortcut-select-file', subscription);
       };
     }
+  },
+  
+  // ロガー機能を追加
+  logger: {
+    debug: (message) => logger.debug(message),
+    info: (message) => logger.info(message),
+    warn: (message) => logger.warn(message),
+    error: (message) => logger.error(message)
   }
 });
 
